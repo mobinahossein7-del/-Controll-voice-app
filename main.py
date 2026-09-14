@@ -1,3 +1,8 @@
+# ============================================================
+# Voice Control
+# Arabic Voice Recognition for Android
+# ============================================================
+
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -5,10 +10,10 @@ from kivy.uix.label import Label
 from kivy.core.text import LabelBase
 from kivy.clock import Clock
 
-# =========================================================
-# الخط العربي
-# يجب أن يكون الملف في نفس مجلد main.py
-# =========================================================
+
+# ============================================================
+# Arabic Font
+# ============================================================
 
 FONT_FILE = "NotoKufiArabic-VariableFont_wght.ttf"
 
@@ -22,9 +27,21 @@ except Exception:
     ARABIC_FONT = "Roboto"
 
 
-# =========================================================
-# التطبيق
-# =========================================================
+# ============================================================
+# Android UI Thread
+# ============================================================
+
+try:
+    from android.runnable import run_on_ui_thread
+except Exception:
+
+    def run_on_ui_thread(func):
+        return func
+
+
+# ============================================================
+# Voice Control App
+# ============================================================
 
 class VoiceControlApp(App):
 
@@ -32,13 +49,23 @@ class VoiceControlApp(App):
 
         self.title = "التحكم الصوتي"
 
+        self.recognizer = None
+        self.listener = None
+
+        # ----------------------------------------------------
+        # Main Layout
+        # ----------------------------------------------------
+
         layout = BoxLayout(
             orientation="vertical",
             padding=30,
             spacing=20
         )
 
-        # العنوان
+        # ----------------------------------------------------
+        # Title
+        # ----------------------------------------------------
+
         self.title_label = Label(
             text="التحكم الصوتي بالإعدادات",
             font_name=ARABIC_FONT,
@@ -46,12 +73,17 @@ class VoiceControlApp(App):
             halign="center",
             valign="middle",
             size_hint_y=None,
-            height=80
+            height=90
         )
 
-        layout.add_widget(self.title_label)
+        layout.add_widget(
+            self.title_label
+        )
 
-        # حالة التطبيق
+        # ----------------------------------------------------
+        # Status
+        # ----------------------------------------------------
+
         self.status_label = Label(
             text="اضغط على زر بدء الاستماع",
             font_name=ARABIC_FONT,
@@ -60,9 +92,14 @@ class VoiceControlApp(App):
             valign="middle"
         )
 
-        layout.add_widget(self.status_label)
+        layout.add_widget(
+            self.status_label
+        )
 
-        # النص الذي تم التعرف عليه
+        # ----------------------------------------------------
+        # Recognized Text
+        # ----------------------------------------------------
+
         self.result_label = Label(
             text="",
             font_name=ARABIC_FONT,
@@ -71,24 +108,34 @@ class VoiceControlApp(App):
             valign="middle"
         )
 
-        layout.add_widget(self.result_label)
+        layout.add_widget(
+            self.result_label
+        )
 
-        # زر الاستماع
-        listen_button = Button(
+        # ----------------------------------------------------
+        # Start Button
+        # ----------------------------------------------------
+
+        start_button = Button(
             text="🎤 بدء الاستماع",
             font_name=ARABIC_FONT,
             font_size=22,
             size_hint_y=None,
-            height=70
+            height=75
         )
 
-        listen_button.bind(
-            on_press=self.start_listening
+        start_button.bind(
+            on_release=self.start_listening
         )
 
-        layout.add_widget(listen_button)
+        layout.add_widget(
+            start_button
+        )
 
-        # زر الإيقاف
+        # ----------------------------------------------------
+        # Stop Button
+        # ----------------------------------------------------
+
         stop_button = Button(
             text="إيقاف الاستماع",
             font_name=ARABIC_FONT,
@@ -98,12 +145,17 @@ class VoiceControlApp(App):
         )
 
         stop_button.bind(
-            on_press=self.stop_listening
+            on_release=self.stop_listening
         )
 
-        layout.add_widget(stop_button)
+        layout.add_widget(
+            stop_button
+        )
 
-        # زر المسح
+        # ----------------------------------------------------
+        # Clear Button
+        # ----------------------------------------------------
+
         clear_button = Button(
             text="مسح النص",
             font_name=ARABIC_FONT,
@@ -113,39 +165,66 @@ class VoiceControlApp(App):
         )
 
         clear_button.bind(
-            on_press=self.clear_text
+            on_release=self.clear_text
         )
 
-        layout.add_widget(clear_button)
+        layout.add_widget(
+            clear_button
+        )
 
         return layout
 
 
-    # =====================================================
-    # بدء الاستماع
-    # =====================================================
+    # ========================================================
+    # Update UI safely
+    # ========================================================
 
+    def set_status(self, text):
+
+        Clock.schedule_once(
+            lambda dt: self._set_status(text),
+            0
+        )
+
+
+    def _set_status(self, text):
+
+        self.status_label.text = text
+
+
+    def set_result(self, text):
+
+        Clock.schedule_once(
+            lambda dt: self._set_result(text),
+            0
+        )
+
+
+    def _set_result(self, text):
+
+        self.result_label.text = text
+
+
+    # ========================================================
+    # Start Listening
+    #
+    # IMPORTANT:
+    # SpeechRecognizer must be created and started
+    # from Android Main Thread.
+    # ========================================================
+
+    @run_on_ui_thread
     def start_listening(self, *args):
 
-        self.status_label.text = "جاري الاستماع..."
-
-        self.result_label.text = ""
-
         try:
 
-            from android.permissions import request_permissions
-            from android.permissions import Permission
-
-            request_permissions([
-                Permission.RECORD_AUDIO
-            ])
-
-        except Exception:
-            pass
-
-        try:
+            # ------------------------------------------------
+            # Android classes
+            # ------------------------------------------------
 
             from jnius import autoclass
+            from jnius import PythonJavaClass
+            from jnius import java_method
 
             PythonActivity = autoclass(
                 "org.kivy.android.PythonActivity"
@@ -156,31 +235,54 @@ class VoiceControlApp(App):
             )
 
             RecognizerIntent = autoclass(
+                "android.speech.RecognizerIntent"
+            )
+
+            Intent = autoclass(
                 "android.content.Intent"
             )
 
-            Locale = autoclass(
-                "java.util.Locale"
-            )
-
-            self.SpeechRecognizer = SpeechRecognizer
-            self.RecognizerIntent = RecognizerIntent
-
             activity = PythonActivity.mActivity
 
-            if not SpeechRecognizer.isRecognitionAvailable(activity):
+            # ------------------------------------------------
+            # Check Speech Recognition
+            # ------------------------------------------------
 
-                self.status_label.text = (
+            if not SpeechRecognizer.isRecognitionAvailable(
+                activity
+            ):
+
+                self.set_status(
                     "التعرف الصوتي غير متوفر على الجهاز"
                 )
 
                 return
 
-            self.recognizer = SpeechRecognizer.createSpeechRecognizer(
-                activity
-            )
+            # ------------------------------------------------
+            # Stop old recognizer if it exists
+            # ------------------------------------------------
 
-            from jnius import PythonJavaClass, java_method
+            try:
+
+                if self.recognizer is not None:
+
+                    self.recognizer.stopListening()
+
+                    self.recognizer.cancel()
+
+                    self.recognizer.destroy()
+
+            except Exception:
+                pass
+
+            self.recognizer = None
+            self.listener = None
+
+            # ------------------------------------------------
+            # Recognition Listener
+            # ------------------------------------------------
+
+            app = self
 
 
             class RecognitionListener(
@@ -191,118 +293,222 @@ class VoiceControlApp(App):
                     "android.speech.RecognitionListener"
                 ]
 
-                def __init__(self, app):
+                __javacontext__ = "app"
+
+
+                def __init__(self):
 
                     super().__init__()
 
-                    self.app = app
 
+                # --------------------------------------------
+                # Ready
+                # --------------------------------------------
 
-                @java_method("()V")
+                @java_method("(Landroid/os/Bundle;)V")
                 def onReadyForSpeech(self, params):
-                    pass
 
+                    app.set_status(
+                        "جاهز للاستماع..."
+                    )
+
+
+                # --------------------------------------------
+                # Beginning of speech
+                # --------------------------------------------
 
                 @java_method("()V")
                 def onBeginningOfSpeech(self):
-                    pass
 
+                    app.set_status(
+                        "🎤 أستمع إليك..."
+                    )
+
+
+                # --------------------------------------------
+                # Buffer
+                # --------------------------------------------
 
                 @java_method("([B)V")
                 def onBufferReceived(self, buffer):
+
                     pass
 
+
+                # --------------------------------------------
+                # End of speech
+                # --------------------------------------------
 
                 @java_method("()V")
                 def onEndOfSpeech(self):
 
-                    self.app.status_label.text = (
-                        "انتهى الاستماع"
+                    app.set_status(
+                        "جارٍ معالجة الكلام..."
                     )
 
+
+                # --------------------------------------------
+                # Error
+                # --------------------------------------------
 
                 @java_method("(I)V")
                 def onError(self, error):
 
-                    self.app.status_label.text = (
-                        "حدث خطأ أثناء التعرف الصوتي"
+                    messages = {
+
+                        1: "خطأ في الشبكة",
+
+                        2: "الشبكة غير متوفرة",
+
+                        3: "الخادم مشغول",
+
+                        4: "الخدمة غير متاحة",
+
+                        5: "خطأ في العميل",
+
+                        6: "لم يبدأ الكلام",
+
+                        7: "لم يتم العثور على كلام",
+
+                        8: "انتهت مهلة التعرف",
+
+                        9: "الصلاحية غير متوفرة"
+
+                    }
+
+                    message = messages.get(
+                        error,
+                        "حدث خطأ في التعرف الصوتي"
+                    )
+
+                    app.set_status(
+                        message
                     )
 
 
-                @java_method("(Landroid/os/Bundle;)V")
-                def onPartialResults(self, results):
+                # --------------------------------------------
+                # Partial Results
+                # --------------------------------------------
 
-                    self.handle_results(results)
+                @java_method(
+                    "(Landroid/os/Bundle;)V"
+                )
+                def onPartialResults(
+                    self,
+                    results
+                ):
+
+                    app.read_results(
+                        results,
+                        False
+                    )
 
 
-                @java_method("(Landroid/os/Bundle;)V")
-                def onResults(self, results):
+                # --------------------------------------------
+                # Final Results
+                # --------------------------------------------
 
-                    self.handle_results(results)
+                @java_method(
+                    "(Landroid/os/Bundle;)V"
+                )
+                def onResults(
+                    self,
+                    results
+                ):
 
+                    app.read_results(
+                        results,
+                        True
+                    )
+
+
+                # --------------------------------------------
+                # RMS
+                # --------------------------------------------
 
                 @java_method("(F)V")
-                def onRmsChanged(self, rmsdB):
+                def onRmsChanged(
+                    self,
+                    rmsdB
+                ):
+
                     pass
 
 
-                @java_method("(Landroid/os/Bundle;)V")
-                def onEvent(self, eventType, params):
+                # --------------------------------------------
+                # Event
+                # --------------------------------------------
+
+                @java_method(
+                    "(ILandroid/os/Bundle;)V"
+                )
+                def onEvent(
+                    self,
+                    eventType,
+                    params
+                ):
+
                     pass
 
 
-                def handle_results(self, results):
+            # ------------------------------------------------
+            # Create listener
+            # ------------------------------------------------
 
-                    try:
+            self.listener = RecognitionListener()
 
-                        ArrayList = results.getStringArrayList(
-                            "results_recognition"
-                        )
+            # ------------------------------------------------
+            # Create SpeechRecognizer
+            #
+            # This is now running on Android Main Thread.
+            # ------------------------------------------------
 
-                        if ArrayList:
-
-                            text = str(
-                                ArrayList.get(0)
-                            )
-
-                            self.app.process_command(
-                                text
-                            )
-
-                    except Exception:
-                        pass
-
-
-            self.listener = RecognitionListener(
-                self
+            self.recognizer = (
+                SpeechRecognizer.createSpeechRecognizer(
+                    activity
+                )
             )
 
             self.recognizer.setRecognitionListener(
                 self.listener
             )
 
-            intent = RecognizerIntent(
-                "android.speech.action.RECOGNIZE_SPEECH"
+            # ------------------------------------------------
+            # Recognition Intent
+            # ------------------------------------------------
+
+            intent = Intent(
+                RecognizerIntent.ACTION_RECOGNIZE_SPEECH
             )
 
             intent.putExtra(
-                "android.speech.extra.LANGUAGE_MODEL",
-                "free_form"
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
 
+            # Arabic
             intent.putExtra(
-                "android.speech.extra.LANGUAGE",
+                RecognizerIntent.EXTRA_LANGUAGE,
                 "ar"
             )
 
             intent.putExtra(
-                "android.speech.extra.LANGUAGE_PREFERENCE",
+                RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
                 "ar"
             )
 
+            # Partial results
             intent.putExtra(
-                "android.speech.extra.PARTIAL_RESULTS",
+                RecognizerIntent.EXTRA_PARTIAL_RESULTS,
                 True
+            )
+
+            # ------------------------------------------------
+            # Start recognition
+            # ------------------------------------------------
+
+            self.set_status(
+                "جاري بدء الاستماع..."
             )
 
             self.recognizer.startListening(
@@ -311,94 +517,129 @@ class VoiceControlApp(App):
 
         except Exception as e:
 
-            self.status_label.text = (
-                "تعذر تشغيل التعرف الصوتي"
+            self.set_status(
+                "حدث خطأ أثناء تشغيل الميكروفون"
             )
 
-            self.result_label.text = str(e)
+            self.set_result(
+                str(e)
+            )
 
 
-    # =====================================================
-    # إيقاف الاستماع
-    # =====================================================
+    # ========================================================
+    # Read Speech Results
+    # ========================================================
 
+    def read_results(
+        self,
+        results,
+        final_result=False
+    ):
+
+        try:
+
+            if results is None:
+                return
+
+            ArrayList = results.getStringArrayList(
+                "results_recognition"
+            )
+
+            if ArrayList is None:
+                return
+
+            if ArrayList.size() == 0:
+                return
+
+            text = str(
+                ArrayList.get(0)
+            )
+
+            if not text:
+                return
+
+            # -----------------------------------------------
+            # Show recognized text
+            # -----------------------------------------------
+
+            self.set_result(
+                text
+            )
+
+            if final_result:
+
+                self.set_status(
+                    "تم التعرف على الأمر"
+                )
+
+                # -------------------------------------------
+                # Process command
+                # -------------------------------------------
+
+                Clock.schedule_once(
+                    lambda dt: self.process_command(text),
+                    0
+                )
+
+            else:
+
+                self.set_status(
+                    "🎤 " + text
+                )
+
+        except Exception as e:
+
+            self.set_result(
+                str(e)
+            )
+
+
+    # ========================================================
+    # Stop Listening
+    #
+    # IMPORTANT:
+    # stopListening() is also executed on Main Thread.
+    # ========================================================
+
+    @run_on_ui_thread
     def stop_listening(self, *args):
 
         try:
 
-            if hasattr(self, "recognizer"):
+            if self.recognizer is not None:
 
                 self.recognizer.stopListening()
 
-                self.status_label.text = (
-                    "تم إيقاف الاستماع"
-                )
+                self.recognizer.cancel()
 
-        except Exception:
+                self.recognizer.destroy()
 
-            self.status_label.text = (
+                self.recognizer = None
+
+                self.listener = None
+
+            self.set_status(
+                "تم إيقاف الاستماع"
+            )
+
+        except Exception as e:
+
+            self.set_status(
                 "تم إيقاف الاستماع"
             )
 
 
-    # =====================================================
-    # معالجة الأمر الصوتي
-    # =====================================================
+    # ========================================================
+    # Process Voice Command
+    # ========================================================
 
     def process_command(self, text):
 
-        self.result_label.text = text
+        command = text.strip().lower()
 
-        self.status_label.text = (
-            "تم التعرف على الكلام"
-        )
+        # ----------------------------------------------------
+        # Wi-Fi
+        # ----------------------------------------------------
 
-        command = text.lower()
-
-        # أوامر مستقبلية يمكن إضافة وظائفها هنا
-
-        if "واي فاي" in command or "wifi" in command:
-
-            self.status_label.text = (
-                "تم التعرف على أمر الواي فاي"
-            )
-
-        elif "بلوتوث" in command:
-
-            self.status_label.text = (
-                "تم التعرف على أمر البلوتوث"
-            )
-
-        elif "صوت" in command:
-
-            self.status_label.text = (
-                "تم التعرف على أمر الصوت"
-            )
-
-        elif "سطوع" in command:
-
-            self.status_label.text = (
-                "تم التعرف على أمر السطوع"
-            )
-
-
-    # =====================================================
-    # مسح النص
-    # =====================================================
-
-    def clear_text(self, *args):
-
-        self.result_label.text = ""
-
-        self.status_label.text = (
-            "تم مسح النص"
-        )
-
-
-# =========================================================
-# تشغيل التطبيق
-# =========================================================
-
-if __name__ == "__main__":
-
-    VoiceControlApp().run()
+        if (
+           

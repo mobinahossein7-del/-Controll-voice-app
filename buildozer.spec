@@ -21,9 +21,6 @@ android.ndk = 25b
 
 android.accept_sdk_license = True
 
-p4a.branch = 2024.01.21
-
-
 [buildozer]
 
 log_level = 2

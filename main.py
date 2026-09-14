@@ -1,6 +1,6 @@
 # ============================================================
-# Voice Control
-# Arabic Voice Recognition for Android
+# Voice Control - Android
+# التحكم الصوتي بالإعدادات
 # ============================================================
 
 from kivy.app import App
@@ -12,7 +12,7 @@ from kivy.clock import Clock
 
 
 # ============================================================
-# Arabic Font
+# الخط العربي
 # ============================================================
 
 FONT_FILE = "NotoKufiArabic-VariableFont_wght.ttf"
@@ -28,33 +28,27 @@ except Exception:
 
 
 # ============================================================
-# Android UI Thread
+# Android Main Thread
 # ============================================================
 
 try:
     from android.runnable import run_on_ui_thread
 except Exception:
 
-    def run_on_ui_thread(func):
-        return func
+    def run_on_ui_thread(function):
+        return function
 
 
 # ============================================================
-# Voice Control App
+# التطبيق
 # ============================================================
 
 class VoiceControlApp(App):
 
     def build(self):
 
-        self.title = "التحكم الصوتي"
-
         self.recognizer = None
         self.listener = None
-
-        # ----------------------------------------------------
-        # Main Layout
-        # ----------------------------------------------------
 
         layout = BoxLayout(
             orientation="vertical",
@@ -63,7 +57,7 @@ class VoiceControlApp(App):
         )
 
         # ----------------------------------------------------
-        # Title
+        # العنوان
         # ----------------------------------------------------
 
         self.title_label = Label(
@@ -76,12 +70,10 @@ class VoiceControlApp(App):
             height=90
         )
 
-        layout.add_widget(
-            self.title_label
-        )
+        layout.add_widget(self.title_label)
 
         # ----------------------------------------------------
-        # Status
+        # الحالة
         # ----------------------------------------------------
 
         self.status_label = Label(
@@ -92,12 +84,10 @@ class VoiceControlApp(App):
             valign="middle"
         )
 
-        layout.add_widget(
-            self.status_label
-        )
+        layout.add_widget(self.status_label)
 
         # ----------------------------------------------------
-        # Recognized Text
+        # الكلام الذي تم التعرف عليه
         # ----------------------------------------------------
 
         self.result_label = Label(
@@ -108,16 +98,14 @@ class VoiceControlApp(App):
             valign="middle"
         )
 
-        layout.add_widget(
-            self.result_label
-        )
+        layout.add_widget(self.result_label)
 
         # ----------------------------------------------------
-        # Start Button
+        # زر بدء الاستماع
         # ----------------------------------------------------
 
         start_button = Button(
-            text="🎤 بدء الاستماع",
+            text="بدء الاستماع",
             font_name=ARABIC_FONT,
             font_size=22,
             size_hint_y=None,
@@ -128,12 +116,10 @@ class VoiceControlApp(App):
             on_release=self.start_listening
         )
 
-        layout.add_widget(
-            start_button
-        )
+        layout.add_widget(start_button)
 
         # ----------------------------------------------------
-        # Stop Button
+        # زر الإيقاف
         # ----------------------------------------------------
 
         stop_button = Button(
@@ -148,12 +134,10 @@ class VoiceControlApp(App):
             on_release=self.stop_listening
         )
 
-        layout.add_widget(
-            stop_button
-        )
+        layout.add_widget(stop_button)
 
         # ----------------------------------------------------
-        # Clear Button
+        # زر المسح
         # ----------------------------------------------------
 
         clear_button = Button(
@@ -168,15 +152,13 @@ class VoiceControlApp(App):
             on_release=self.clear_text
         )
 
-        layout.add_widget(
-            clear_button
-        )
+        layout.add_widget(clear_button)
 
         return layout
 
 
     # ========================================================
-    # Update UI safely
+    # تحديث الحالة
     # ========================================================
 
     def set_status(self, text):
@@ -192,6 +174,10 @@ class VoiceControlApp(App):
         self.status_label.text = text
 
 
+    # ========================================================
+    # تحديث النص
+    # ========================================================
+
     def set_result(self, text):
 
         Clock.schedule_once(
@@ -206,25 +192,63 @@ class VoiceControlApp(App):
 
 
     # ========================================================
-    # Start Listening
-    #
-    # IMPORTANT:
-    # SpeechRecognizer must be created and started
-    # from Android Main Thread.
+    # بدء الاستماع
     # ========================================================
 
-    @run_on_ui_thread
     def start_listening(self, *args):
+
+        self.set_status(
+            "جاري طلب صلاحية الميكروفون..."
+        )
 
         try:
 
-            # ------------------------------------------------
-            # Android classes
-            # ------------------------------------------------
+            from android.permissions import (
+                request_permissions,
+                Permission
+            )
 
-            from jnius import autoclass
-            from jnius import PythonJavaClass
-            from jnius import java_method
+            request_permissions([
+                Permission.RECORD_AUDIO
+            ])
+
+            # ننتظر لحظة حتى تظهر/تُعالج نافذة الصلاحية
+            Clock.schedule_once(
+                self.start_recognition,
+                1.0
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                "تعذر طلب صلاحية الميكروفون"
+            )
+
+            self.set_result(
+                str(e)
+            )
+
+
+    # ========================================================
+    # تشغيل SpeechRecognizer
+    #
+    # هذه الدالة تعمل على Android Main Thread
+    # ========================================================
+
+    @run_on_ui_thread
+    def start_recognition(self, *args):
+
+        try:
+
+            from jnius import (
+                autoclass,
+                PythonJavaClass,
+                java_method
+            )
+
+            # ------------------------------------------------
+            # Android Classes
+            # ------------------------------------------------
 
             PythonActivity = autoclass(
                 "org.kivy.android.PythonActivity"
@@ -245,7 +269,7 @@ class VoiceControlApp(App):
             activity = PythonActivity.mActivity
 
             # ------------------------------------------------
-            # Check Speech Recognition
+            # التحقق من توفر التعرف الصوتي
             # ------------------------------------------------
 
             if not SpeechRecognizer.isRecognitionAvailable(
@@ -253,39 +277,24 @@ class VoiceControlApp(App):
             ):
 
                 self.set_status(
-                    "التعرف الصوتي غير متوفر على الجهاز"
+                    "التعرف الصوتي غير متوفر على هذا الجهاز"
                 )
 
                 return
 
             # ------------------------------------------------
-            # Stop old recognizer if it exists
+            # إتلاف أي Recognizer قديم
             # ------------------------------------------------
 
-            try:
-
-                if self.recognizer is not None:
-
-                    self.recognizer.stopListening()
-
-                    self.recognizer.cancel()
-
-                    self.recognizer.destroy()
-
-            except Exception:
-                pass
-
-            self.recognizer = None
-            self.listener = None
-
-            # ------------------------------------------------
-            # Recognition Listener
-            # ------------------------------------------------
+            self.destroy_recognizer()
 
             app = self
 
+            # =================================================
+            # Recognition Listener
+            # =================================================
 
-            class RecognitionListener(
+            class VoiceRecognitionListener(
                 PythonJavaClass
             ):
 
@@ -293,68 +302,75 @@ class VoiceControlApp(App):
                     "android.speech.RecognitionListener"
                 ]
 
-                __javacontext__ = "app"
+                # ---------------------------------------------
+                # جاهز للاستماع
+                # ---------------------------------------------
 
-
-                def __init__(self):
-
-                    super().__init__()
-
-
-                # --------------------------------------------
-                # Ready
-                # --------------------------------------------
-
-                @java_method("(Landroid/os/Bundle;)V")
-                def onReadyForSpeech(self, params):
+                @java_method(
+                    "(Landroid/os/Bundle;)V"
+                )
+                def onReadyForSpeech(
+                    self,
+                    params
+                ):
 
                     app.set_status(
                         "جاهز للاستماع..."
                     )
 
 
-                # --------------------------------------------
-                # Beginning of speech
-                # --------------------------------------------
+                # ---------------------------------------------
+                # بدأ الكلام
+                # ---------------------------------------------
 
                 @java_method("()V")
-                def onBeginningOfSpeech(self):
+                def onBeginningOfSpeech(
+                    self
+                ):
 
                     app.set_status(
-                        "🎤 أستمع إليك..."
+                        "أستمع إليك..."
                     )
 
 
-                # --------------------------------------------
-                # Buffer
-                # --------------------------------------------
+                # ---------------------------------------------
+                # استقبال البيانات
+                # ---------------------------------------------
 
                 @java_method("([B)V")
-                def onBufferReceived(self, buffer):
+                def onBufferReceived(
+                    self,
+                    buffer
+                ):
 
                     pass
 
 
-                # --------------------------------------------
-                # End of speech
-                # --------------------------------------------
+                # ---------------------------------------------
+                # انتهاء الكلام
+                # ---------------------------------------------
 
                 @java_method("()V")
-                def onEndOfSpeech(self):
+                def onEndOfSpeech(
+                    self
+                ):
 
                     app.set_status(
                         "جارٍ معالجة الكلام..."
                     )
 
 
-                # --------------------------------------------
-                # Error
-                # --------------------------------------------
+                # ---------------------------------------------
+                # خطأ
+                # ---------------------------------------------
 
                 @java_method("(I)V")
-                def onError(self, error):
+                def onError(
+                    self,
+                    error
+                ):
 
-                    messages = {
+                    error_messages = {
 
                         1: "خطأ في الشبكة",
 
@@ -364,7 +380,7 @@ class VoiceControlApp(App):
 
                         4: "الخدمة غير متاحة",
 
-                        5: "خطأ في العميل",
+                        5: "خطأ في التطبيق",
 
                         6: "لم يبدأ الكلام",
 
@@ -372,11 +388,10 @@ class VoiceControlApp(App):
 
                         8: "انتهت مهلة التعرف",
 
-                        9: "الصلاحية غير متوفرة"
-
+                        9: "صلاحية التعرف غير متوفرة"
                     }
 
-                    message = messages.get(
+                    message = error_messages.get(
                         error,
                         "حدث خطأ في التعرف الصوتي"
                     )
@@ -386,9 +401,9 @@ class VoiceControlApp(App):
                     )
 
 
-                # --------------------------------------------
-                # Partial Results
-                # --------------------------------------------
+                # ---------------------------------------------
+                # النتائج الجزئية
+                # ---------------------------------------------
 
                 @java_method(
                     "(Landroid/os/Bundle;)V"
@@ -404,9 +419,9 @@ class VoiceControlApp(App):
                     )
 
 
-                # --------------------------------------------
-                # Final Results
-                # --------------------------------------------
+                # ---------------------------------------------
+                # النتيجة النهائية
+                # ---------------------------------------------
 
                 @java_method(
                     "(Landroid/os/Bundle;)V"
@@ -422,9 +437,9 @@ class VoiceControlApp(App):
                     )
 
 
-                # --------------------------------------------
-                # RMS
-                # --------------------------------------------
+                # ---------------------------------------------
+                # مستوى الصوت
+                # ---------------------------------------------
 
                 @java_method("(F)V")
                 def onRmsChanged(
@@ -435,9 +450,9 @@ class VoiceControlApp(App):
                     pass
 
 
-                # --------------------------------------------
-                # Event
-                # --------------------------------------------
+                # ---------------------------------------------
+                # الأحداث
+                # ---------------------------------------------
 
                 @java_method(
                     "(ILandroid/os/Bundle;)V"
@@ -452,15 +467,13 @@ class VoiceControlApp(App):
 
 
             # ------------------------------------------------
-            # Create listener
+            # إنشاء Listener
             # ------------------------------------------------
 
-            self.listener = RecognitionListener()
+            self.listener = VoiceRecognitionListener()
 
             # ------------------------------------------------
-            # Create SpeechRecognizer
-            #
-            # This is now running on Android Main Thread.
+            # إنشاء SpeechRecognizer
             # ------------------------------------------------
 
             self.recognizer = (
@@ -469,12 +482,16 @@ class VoiceControlApp(App):
                 )
             )
 
+            # ------------------------------------------------
+            # ربط Listener
+            # ------------------------------------------------
+
             self.recognizer.setRecognitionListener(
                 self.listener
             )
 
             # ------------------------------------------------
-            # Recognition Intent
+            # Intent
             # ------------------------------------------------
 
             intent = Intent(
@@ -486,29 +503,29 @@ class VoiceControlApp(App):
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
 
-            # Arabic
+            # اللغة العربية
             intent.putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE,
-                "ar"
+                "ar-YE"
             )
 
             intent.putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
-                "ar"
+                "ar-YE"
             )
 
-            # Partial results
+            # النتائج الجزئية
             intent.putExtra(
                 RecognizerIntent.EXTRA_PARTIAL_RESULTS,
                 True
             )
 
             # ------------------------------------------------
-            # Start recognition
+            # بدء الاستماع
             # ------------------------------------------------
 
             self.set_status(
-                "جاري بدء الاستماع..."
+                "جاري الاستماع..."
             )
 
             self.recognizer.startListening(
@@ -518,7 +535,7 @@ class VoiceControlApp(App):
         except Exception as e:
 
             self.set_status(
-                "حدث خطأ أثناء تشغيل الميكروفون"
+                "تعذر تشغيل التعرف الصوتي"
             )
 
             self.set_result(
@@ -527,7 +544,7 @@ class VoiceControlApp(App):
 
 
     # ========================================================
-    # Read Speech Results
+    # قراءة نتائج التعرف الصوتي
     # ========================================================
 
     def read_results(
@@ -541,30 +558,31 @@ class VoiceControlApp(App):
             if results is None:
                 return
 
-            ArrayList = results.getStringArrayList(
+            values = results.getStringArrayList(
                 "results_recognition"
             )
 
-            if ArrayList is None:
+            if values is None:
                 return
 
-            if ArrayList.size() == 0:
+            if values.size() == 0:
                 return
 
             text = str(
-                ArrayList.get(0)
+                values.get(0)
             )
 
             if not text:
                 return
 
-            # -----------------------------------------------
-            # Show recognized text
-            # -----------------------------------------------
-
+            # عرض الكلام
             self.set_result(
                 text
             )
+
+            # ------------------------------------------------
+            # نتيجة نهائية
+            # ------------------------------------------------
 
             if final_result:
 
@@ -572,19 +590,19 @@ class VoiceControlApp(App):
                     "تم التعرف على الأمر"
                 )
 
-                # -------------------------------------------
-                # Process command
-                # -------------------------------------------
-
                 Clock.schedule_once(
                     lambda dt: self.process_command(text),
                     0
                 )
 
+            # ------------------------------------------------
+            # نتيجة جزئية
+            # ------------------------------------------------
+
             else:
 
                 self.set_status(
-                    "🎤 " + text
+                    "أستمع: " + text
                 )
 
         except Exception as e:
@@ -595,28 +613,20 @@ class VoiceControlApp(App):
 
 
     # ========================================================
-    # Stop Listening
-    #
-    # IMPORTANT:
-    # stopListening() is also executed on Main Thread.
+    # إيقاف الاستماع
     # ========================================================
 
-    @run_on_ui_thread
     def stop_listening(self, *args):
+
+        self.stop_recognition()
+
+
+    @run_on_ui_thread
+    def stop_recognition(self, *args):
 
         try:
 
-            if self.recognizer is not None:
-
-                self.recognizer.stopListening()
-
-                self.recognizer.cancel()
-
-                self.recognizer.destroy()
-
-                self.recognizer = None
-
-                self.listener = None
+            self.destroy_recognizer()
 
             self.set_status(
                 "تم إيقاف الاستماع"
@@ -628,9 +638,43 @@ class VoiceControlApp(App):
                 "تم إيقاف الاستماع"
             )
 
+            self.set_result(
+                str(e)
+            )
+
 
     # ========================================================
-    # Process Voice Command
+    # تدمير SpeechRecognizer
+    #
+    # يجب أن يتم على Main Thread
+    # ========================================================
+
+    @run_on_ui_thread
+    def destroy_recognizer(self):
+
+        if self.recognizer is not None:
+
+            try:
+                self.recognizer.stopListening()
+            except Exception:
+                pass
+
+            try:
+                self.recognizer.cancel()
+            except Exception:
+                pass
+
+            try:
+                self.recognizer.destroy()
+            except Exception:
+                pass
+
+        self.recognizer = None
+        self.listener = None
+
+
+    # ========================================================
+    # معالجة الأمر الصوتي
     # ========================================================
 
     def process_command(self, text):
@@ -642,4 +686,278 @@ class VoiceControlApp(App):
         # ----------------------------------------------------
 
         if (
-           
+            "واي فاي" in command
+            or "وايفاي" in command
+            or "wifi" in command
+            or "wi-fi" in command
+        ):
+
+            self.set_status(
+                "فتح إعدادات الواي فاي..."
+            )
+
+            self.open_settings(
+                "android.settings.WIFI_SETTINGS"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # Bluetooth
+        # ----------------------------------------------------
+
+        if "بلوتوث" in command:
+
+            self.set_status(
+                "فتح إعدادات البلوتوث..."
+            )
+
+            self.open_settings(
+                "android.settings.BLUETOOTH_SETTINGS"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # السطوع
+        # ----------------------------------------------------
+
+        if (
+            "سطوع" in command
+            or "إضاءة الشاشة" in command
+            or "اضاءة الشاشة" in command
+        ):
+
+            self.set_status(
+                "فتح إعدادات الشاشة..."
+            )
+
+            self.open_settings(
+                "android.settings.DISPLAY_SETTINGS"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # رفع الصوت
+        # ----------------------------------------------------
+
+        if (
+            "رفع الصوت" in command
+            or "زيادة الصوت" in command
+            or "عل الصوت" in command
+        ):
+
+            self.change_volume(
+                1
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # خفض الصوت
+        # ----------------------------------------------------
+
+        if (
+            "خفض الصوت" in command
+            or "نقص الصوت" in command
+            or "وطي الصوت" in command
+        ):
+
+            self.change_volume(
+                -1
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # أمر صوت عام
+        # ----------------------------------------------------
+
+        if "صوت" in command:
+
+            self.set_status(
+                "تم التعرف على أمر الصوت"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # أمر غير معروف
+        # ----------------------------------------------------
+
+        self.set_status(
+            "تم التعرف على الكلام، لكن الأمر غير معروف"
+        )
+
+
+    # ========================================================
+    # فتح إعدادات Android
+    # ========================================================
+
+    def open_settings(
+        self,
+        action
+    ):
+
+        self._open_settings(
+            action
+        )
+
+
+    @run_on_ui_thread
+    def _open_settings(
+        self,
+        action
+    ):
+
+        try:
+
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            Intent = autoclass(
+                "android.content.Intent"
+            )
+
+            activity = PythonActivity.mActivity
+
+            intent = Intent(
+                action
+            )
+
+            activity.startActivity(
+                intent
+            )
+
+        except Exception as e:
+
+            self.set_result(
+                str(e)
+            )
+
+
+    # ========================================================
+    # تغيير مستوى الصوت
+    # ========================================================
+
+    def change_volume(
+        self,
+        direction
+    ):
+
+        self._change_volume(
+            direction
+        )
+
+
+    @run_on_ui_thread
+    def _change_volume(
+        self,
+        direction
+    ):
+
+        try:
+
+            from jnius import autoclass
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            Context = autoclass(
+                "android.content.Context"
+            )
+
+            AudioManager = autoclass(
+                "android.media.AudioManager"
+            )
+
+            activity = PythonActivity.mActivity
+
+            audio_manager = (
+                activity.getSystemService(
+                    Context.AUDIO_SERVICE
+                )
+            )
+
+            # ------------------------------------------------
+            # رفع الصوت
+            # ------------------------------------------------
+
+            if direction > 0:
+
+                audio_manager.adjustVolume(
+                    AudioManager.ADJUST_RAISE,
+                    AudioManager.FLAG_SHOW_UI
+                )
+
+                self.set_status(
+                    "تم رفع الصوت"
+                )
+
+                return
+
+            # ------------------------------------------------
+            # خفض الصوت
+            # ------------------------------------------------
+
+            audio_manager.adjustVolume(
+                AudioManager.ADJUST_LOWER,
+                AudioManager.FLAG_SHOW_UI
+            )
+
+            self.set_status(
+                "تم خفض الصوت"
+            )
+
+        except Exception as e:
+
+            self.set_result(
+                str(e)
+            )
+
+
+    # ========================================================
+    # مسح النص
+    # ========================================================
+
+    def clear_text(
+        self,
+        *args
+    ):
+
+        self.result_label.text = ""
+
+        self.status_label.text = (
+            "اضغط على زر بدء الاستماع"
+        )
+
+
+    # ========================================================
+    # إغلاق التطبيق
+    # ========================================================
+
+    def on_stop(self):
+
+        try:
+
+            if self.recognizer is not None:
+
+                self.stop_recognition()
+
+        except Exception:
+
+            pass
+
+
+# ============================================================
+# تشغيل التطبيق
+# ============================================================
+
+if __name__ == "__main__":
+
+    VoiceControlApp().run()

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 from __future__ import annotations
 
 import re
@@ -12,34 +13,68 @@ from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 
-FONT_FILE = "NotoKufiArabic-Regular.ttf"
+
+# ============================================================
+# الخط العربي
+# ============================================================
+
+FONT_FILE = "NotoKufiArabic-VariableFont_wght.ttf"
 
 try:
-    LabelBase.register(name="Arabic", fn_regular=FONT_FILE)
+    LabelBase.register(
+        name="Arabic",
+        fn_regular=FONT_FILE
+    )
     ARABIC_FONT = "Arabic"
 except Exception:
     ARABIC_FONT = "Roboto"
 
-try:
-    from android.permissions import Permission, request_permissions
-except Exception:
-    Permission = None
-    request_permissions = None
+
+# ============================================================
+# Android permissions
+# ============================================================
 
 try:
-    from jnius import autoclass, PythonJavaClass, java_method
+    from android.permissions import (
+        Permission,
+        check_permission,
+        request_permissions,
+    )
+except Exception:
+    Permission = None
+    check_permission = None
+    request_permissions = None
+
+
+# ============================================================
+# PyJNIus
+# ============================================================
+
+try:
+    from jnius import (
+        autoclass,
+        PythonJavaClass,
+        java_method,
+    )
 except Exception:
     autoclass = None
     PythonJavaClass = object
 
     def java_method(*args, **kwargs):
-        def decorator(fn):
-            return fn
+        def decorator(function):
+            return function
         return decorator
 
 
+# ============================================================
+# Speech Recognition Listener
+# ============================================================
+
 class SpeechListener(PythonJavaClass):
-    __javainterfaces__ = ["android/speech/RecognitionListener"]
+
+    __javainterfaces__ = [
+        "android/speech/RecognitionListener"
+    ]
 
     def __init__(self, app):
         super().__init__()
@@ -67,21 +102,25 @@ class SpeechListener(PythonJavaClass):
 
     @java_method("(I)V")
     def onError(self, error):
+
         messages = {
             1: "لم أفهم الكلام، حاول مرة أخرى.",
             2: "تعذر الاتصال بخدمة التعرف الصوتي.",
             3: "انتهى وقت التعرف الصوتي.",
             4: "خدمة التعرف الصوتي غير متاحة.",
-            5: "خطأ في الصوت.",
+            5: "حدث خطأ في الصوت.",
             6: "لم يبدأ الكلام.",
             7: "لم يتم العثور على نتيجة.",
             8: "خدمة التعرف مشغولة.",
             9: "صلاحية التعرف الصوتي غير مسموحة.",
         }
 
-        self.app.set_status(
-            messages.get(error, f"حدث خطأ في التعرف: {error}")
+        message = messages.get(
+            error,
+            f"حدث خطأ في التعرف الصوتي: {error}"
         )
+
+        self.app.set_status(message)
         self.app.set_listening(False)
 
     @java_method("(Landroid/os/Bundle;)V")
@@ -98,76 +137,100 @@ class SpeechListener(PythonJavaClass):
         pass
 
 
+# ============================================================
+# التطبيق
+# ============================================================
+
 class VoiceControlApp(App):
 
-    title = "التحكم الصوتي"
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    recognizer = None
-    listener = None
-    is_listening = False
+        self.recognizer = None
+        self.listener = None
+        self.activity = None
+
+        self.is_listening = False
+
+        self.Intent = None
+        self.RecognizerIntent = None
+
+        self.AudioManager = None
+        self.Settings = None
+
+    # --------------------------------------------------------
+    # بناء الواجهة
+    # --------------------------------------------------------
 
     def build(self):
 
         root = BoxLayout(
             orientation="vertical",
             padding=dp(18),
-            spacing=dp(12),
+            spacing=dp(12)
         )
 
+        # العنوان
         title = Label(
             text="التحكم الصوتي",
             font_name=ARABIC_FONT,
-            font_size=dp(25),
+            font_size=dp(27),
             size_hint_y=None,
-            height=dp(55),
+            height=dp(60),
+            halign="center",
+            valign="middle"
+        )
+
+        title.bind(
+            size=lambda instance, value:
+            setattr(instance, "text_size", value)
         )
 
         root.add_widget(title)
 
-        self.status = Label(
-            text="اضغط على زر التحدث ثم قل أمرًا",
-            font_name=ARABIC_FONT,
-            font_size=dp(17),
-            halign="center",
-            valign="middle",
-            size_hint_y=None,
-            height=dp(70),
-        )
-
-        self.status.bind(size=self._update_text_size)
-        root.add_widget(self.status)
-
-        self.result = Label(
-            text="لم يتم التعرف على أي أمر بعد.",
+        # الحالة
+        self.status_label = Label(
+            text="اضغط على زر التحدث",
             font_name=ARABIC_FONT,
             font_size=dp(18),
-            halign="right",
-            valign="top",
             size_hint_y=None,
-            height=dp(150),
+            height=dp(55),
+            halign="center",
+            valign="middle"
         )
 
-        self.result.bind(
-            texture_size=self._update_result_height
+        self.status_label.bind(
+            size=lambda instance, value:
+            setattr(instance, "text_size", value)
         )
 
-        self.result.bind(
-            size=self._update_text_size
+        root.add_widget(self.status_label)
+
+        # النص المتعرف عليه
+        self.result_label = Label(
+            text="لم يتم التعرف على أي أمر بعد",
+            font_name=ARABIC_FONT,
+            font_size=dp(17),
+            size_hint_y=None,
+            height=dp(100),
+            halign="center",
+            valign="middle"
         )
 
-        scroll = ScrollView(
-            size_hint=(1, 1)
+        self.result_label.bind(
+            size=lambda instance, value:
+            setattr(instance, "text_size", value)
         )
 
-        scroll.add_widget(self.result)
-        root.add_widget(scroll)
+        root.add_widget(self.result_label)
 
+        # زر التحدث
         self.listen_button = Button(
             text="🎙️ بدء الاستماع",
             font_name=ARABIC_FONT,
             font_size=dp(20),
             size_hint_y=None,
-            height=dp(58),
+            height=dp(65)
         )
 
         self.listen_button.bind(
@@ -176,172 +239,123 @@ class VoiceControlApp(App):
 
         root.add_widget(self.listen_button)
 
-        row = BoxLayout(
+        # ScrollView للأوامر
+        scroll = ScrollView(
+            size_hint=(1, 1)
+        )
+
+        commands = Label(
+            text=(
+                "الأوامر المتاحة:\n\n"
+
+                "🔊 ارفع الصوت\n"
+                "🔉 اخفض الصوت\n"
+                "🔇 كتم الصوت\n\n"
+
+                "💡 ارفع السطوع\n"
+                "💡 اخفض السطوع\n\n"
+
+                "📶 افتح إعدادات الواي فاي\n"
+                "🔵 افتح إعدادات البلوتوث\n"
+                "📱 افتح إعدادات الشاشة\n"
+                "⚙️ افتح الإعدادات\n"
+            ),
+            font_name=ARABIC_FONT,
+            font_size=dp(16),
+            size_hint_y=None,
+            halign="right",
+            valign="top"
+        )
+
+        commands.bind(
+            texture_size=lambda instance, value:
+            setattr(instance, "height", value[1] + dp(20))
+        )
+
+        commands.bind(
+            width=lambda instance, value:
+            setattr(instance, "text_size", (value, None))
+        )
+
+        scroll.add_widget(commands)
+        root.add_widget(scroll)
+
+        # الأزرار السفلية
+        bottom = BoxLayout(
             orientation="horizontal",
             spacing=dp(10),
             size_hint_y=None,
-            height=dp(55),
+            height=dp(55)
         )
 
-        clear_btn = Button(
+        help_button = Button(
+            text="المساعدة",
+            font_name=ARABIC_FONT,
+            font_size=dp(16)
+        )
+
+        clear_button = Button(
             text="مسح",
             font_name=ARABIC_FONT,
-            font_size=dp(17),
+            font_size=dp(16)
         )
 
-        clear_btn.bind(
-            on_release=lambda *_: self.clear_text()
+        help_button.bind(
+            on_release=lambda *_:
+            self.show_help()
         )
 
-        help_btn = Button(
-            text="الأوامر",
-            font_name=ARABIC_FONT,
-            font_size=dp(17),
+        clear_button.bind(
+            on_release=lambda *_:
+            self.clear_result()
         )
 
-        help_btn.bind(
-            on_release=lambda *_: self.show_help()
-        )
+        bottom.add_widget(help_button)
+        bottom.add_widget(clear_button)
 
-        row.add_widget(clear_btn)
-        row.add_widget(help_btn)
+        root.add_widget(bottom)
 
-        root.add_widget(row)
-
+        # تجهيز Android
         Clock.schedule_once(
-            lambda *_: self.prepare_android(),
+            lambda dt: self.setup_android(),
             0.5
         )
 
         return root
 
-    def _update_text_size(self, instance, _size):
-        instance.text_size = (
-            instance.width - dp(10),
-            None
-        )
+    # --------------------------------------------------------
+    # Android
+    # --------------------------------------------------------
 
-    def _update_result_height(self, instance, _size):
-        self.result.height = max(
-            dp(150),
-            instance.texture_size[1] + dp(20)
-        )
-
-    def set_status(self, text):
-        Clock.schedule_once(
-            lambda *_: setattr(
-                self.status,
-                "text",
-                text
-            )
-        )
-
-    def set_listening(self, value):
-
-        self.is_listening = value
-
-        Clock.schedule_once(
-            self._update_button
-        )
-
-    def _update_button(self, *_):
-
-        if self.is_listening:
-            self.listen_button.text = (
-                "⏹️ إيقاف الاستماع"
-            )
-        else:
-            self.listen_button.text = (
-                "🎙️ بدء الاستماع"
-            )
-
-    def clear_text(self):
-
-        self.result.text = "تم مسح النص."
-
-        self.set_status(
-            "جاهز للاستماع."
-        )
-
-    def show_help(self):
-
-        self.result.text = (
-            "أمثلة على الأوامر:\n\n"
-
-            "• ارفع الصوت\n"
-            "• اخفض الصوت\n"
-            "• كتم الصوت\n"
-            "• الصوت 50 بالمئة\n\n"
-
-            "• سطوع 50 بالمئة\n"
-            "• ارفع السطوع\n"
-            "• اخفض السطوع\n\n"
-
-            "• شغل الواي فاي\n"
-            "• أوقف الواي فاي\n"
-            "• افتح إعدادات الواي فاي\n\n"
-
-            "• افتح البلوتوث\n"
-            "• افتح الإعدادات\n"
-            "• افتح إعدادات الشاشة"
-        )
-
-    # ---------------- Android ----------------
-
-    def prepare_android(self):
+    def setup_android(self):
 
         if autoclass is None:
-
             self.set_status(
-                "هذا الإصدار يحتاج Android + PyJNIus."
+                "بيئة Android غير متاحة."
             )
-
             return
-
-        if Permission is not None:
-
-            try:
-
-                request_permissions(
-                    [Permission.RECORD_AUDIO]
-                )
-
-            except Exception:
-                pass
 
         try:
 
-            SpeechRecognizer = autoclass(
+            self.SpeechRecognizer = autoclass(
                 "android.speech.SpeechRecognizer"
             )
 
-            activity = autoclass(
+            Context = autoclass(
+                "android.content.Context"
+            )
+
+            self.activity = autoclass(
                 "org.kivy.android.PythonActivity"
             ).mActivity
 
-            if not SpeechRecognizer.isRecognitionAvailable(
-                activity
+            if not self.SpeechRecognizer.isRecognitionAvailable(
+                self.activity
             ):
-
                 self.set_status(
                     "التعرف الصوتي غير متاح على هذا الهاتف."
                 )
-
                 return
-
-            self.recognizer = (
-                SpeechRecognizer.createSpeechRecognizer(
-                    activity
-                )
-            )
-
-            self.listener = SpeechListener(self)
-
-            self.recognizer.setRecognitionListener(
-                self.listener
-            )
-
-            self.activity = activity
 
             self.Intent = autoclass(
                 "android.content.Intent"
@@ -351,15 +365,79 @@ class VoiceControlApp(App):
                 "android.speech.RecognizerIntent"
             )
 
-            self.set_status(
-                "جاهز. اضغط «بدء الاستماع»."
+            self.AudioManager = autoclass(
+                "android.media.AudioManager"
             )
 
-        except Exception as exc:
+            self.Settings = autoclass(
+                "android.provider.Settings"
+            )
+
+            self.recognizer = (
+                self.SpeechRecognizer
+                .createSpeechRecognizer(
+                    self.activity
+                )
+            )
+
+            self.listener = SpeechListener(self)
+
+            self.recognizer.setRecognitionListener(
+                self.listener
+            )
+
+            self.request_microphone_permission()
+
+        except Exception as e:
 
             self.set_status(
-                f"تعذر تجهيز التعرف الصوتي: {exc}"
+                f"خطأ في تجهيز Android: {e}"
             )
+
+    # --------------------------------------------------------
+    # صلاحية الميكروفون
+    # --------------------------------------------------------
+
+    def request_microphone_permission(self):
+
+        if Permission is None:
+            return
+
+        try:
+
+            permission = Permission.RECORD_AUDIO
+
+            if check_permission is not None:
+
+                if not check_permission(permission):
+
+                    request_permissions(
+                        [permission],
+                        self.permission_callback
+                    )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر طلب صلاحية الميكروفون: {e}"
+            )
+
+    def permission_callback(
+        self,
+        permissions,
+        grant_results
+    ):
+        Clock.schedule_once(
+            lambda dt:
+            self.set_status(
+                "يمكنك الآن الضغط على بدء الاستماع."
+            ),
+            0
+        )
+
+    # --------------------------------------------------------
+    # بدء / إيقاف الاستماع
+    # --------------------------------------------------------
 
     def toggle_listening(self, *_):
 
@@ -372,12 +450,22 @@ class VoiceControlApp(App):
 
         if self.recognizer is None:
 
-            self.prepare_android()
-
-            if self.recognizer is None:
-                return
+            self.set_status(
+                "التعرف الصوتي غير جاهز."
+            )
+            return
 
         try:
+
+            self.is_listening = True
+
+            self.listen_button.text = (
+                "⏹️ إيقاف الاستماع"
+            )
+
+            self.set_status(
+                "🎙️ جارٍ تشغيل الميكروفون..."
+            )
 
             intent = self.Intent(
                 self.RecognizerIntent.ACTION_RECOGNIZE_SPEECH
@@ -385,7 +473,7 @@ class VoiceControlApp(App):
 
             intent.putExtra(
                 self.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                self.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                self.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
 
             intent.putExtra(
@@ -412,25 +500,23 @@ class VoiceControlApp(App):
                 intent
             )
 
-            self.set_listening(True)
+        except Exception as e:
 
-            self.set_status(
-                "🎙️ استمع الآن..."
+            self.is_listening = False
+
+            self.listen_button.text = (
+                "🎙️ بدء الاستماع"
             )
 
-        except Exception as exc:
-
             self.set_status(
-                f"تعذر بدء الاستماع: {exc}"
+                f"خطأ في بدء الاستماع: {e}"
             )
-
-            self.set_listening(False)
 
     def stop_listening(self):
 
         try:
 
-            if self.recognizer is not None:
+            if self.recognizer:
                 self.recognizer.stopListening()
 
         except Exception:
@@ -442,493 +528,564 @@ class VoiceControlApp(App):
             "تم إيقاف الاستماع."
         )
 
-    def _bundle_text(self, bundle):
+    # --------------------------------------------------------
+    # النتائج
+    # --------------------------------------------------------
 
-        if bundle is None:
-            return ""
+    def get_results_from_bundle(self, results):
 
         try:
 
-            texts = bundle.getStringArrayList(
+            matches = results.getStringArrayList(
                 self.RecognizerIntent.EXTRA_RESULTS
             )
 
-            if texts is None:
-                return ""
+            if matches is None:
+                return []
 
-            return " / ".join(
-                str(x) for x in texts[:5]
-            )
+            return [
+                str(matches.get(i))
+                for i in range(matches.size())
+            ]
 
         except Exception:
+            return []
 
-            return ""
-
-    def handle_partial_results(self, bundle):
-
-        text = self._bundle_text(bundle)
-
-        if text:
-
-            self.result.text = (
-                f"أسمع: {text}"
-            )
-
-    def handle_speech_results(self, bundle):
-
-        text = self._bundle_text(bundle)
-
-        if not text:
-
-            self.set_status(
-                "لم يتم التعرف على الكلام."
-            )
-
-            return
-
-        self.result.text = (
-            f"الأمر: {text}"
-        )
-
-        first = text.split(
-            " / "
-        )[0].strip()
-
-        self.execute_command(
-            first
-        )
-
-    # ---------------- Settings ----------------
-
-    def open_settings(self, action):
+    def handle_partial_results(self, results):
 
         try:
 
-            intent = self.Intent(
-                action
+            matches = self.get_results_from_bundle(
+                results
             )
 
-            self.activity.startActivity(
-                intent
-            )
+            if matches:
 
-            return True
-
-        except Exception as exc:
-
-            self.set_status(
-                f"تعذر فتح الإعدادات: {exc}"
-            )
-
-            return False
-
-    def adjust_volume(self, direction):
-
-        try:
-
-            AudioManager = autoclass(
-                "android.media.AudioManager"
-            )
-
-            Context = autoclass(
-                "android.content.Context"
-            )
-
-            audio = self.activity.getSystemService(
-                Context.AUDIO_SERVICE
-            )
-
-            if direction == "up":
-
-                audio.adjustStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.ADJUST_RAISE,
-                    AudioManager.FLAG_SHOW_UI,
+                self.result_label.text = (
+                    "🎙️ " + matches[0]
                 )
+
+        except Exception:
+            pass
+
+    def handle_speech_results(self, results):
+
+        try:
+
+            matches = self.get_results_from_bundle(
+                results
+            )
+
+            if not matches:
 
                 self.set_status(
-                    "تم رفع صوت الوسائط."
+                    "لم يتم التعرف على الكلام."
                 )
 
-            elif direction == "down":
+                return
 
-                audio.adjustStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.ADJUST_LOWER,
-                    AudioManager.FLAG_SHOW_UI,
-                )
+            text = matches[0]
 
-                self.set_status(
-                    "تم خفض صوت الوسائط."
-                )
+            self.result_label.text = (
+                "🗣️ " + text
+            )
 
-            elif direction == "mute":
+            self.execute_command(
+                text
+            )
 
-                audio.adjustStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.ADJUST_MUTE,
-                    AudioManager.FLAG_SHOW_UI,
-                )
-
-                self.set_status(
-                    "تم كتم صوت الوسائط."
-                )
-
-            return True
-
-        except Exception as exc:
+        except Exception as e:
 
             self.set_status(
-                f"تعذر التحكم بالصوت: {exc}"
+                f"خطأ في معالجة الكلام: {e}"
             )
 
-            return False
+    # --------------------------------------------------------
+    # تنظيف النص
+    # --------------------------------------------------------
 
-    def set_volume_percent(self, percent):
+    def normalize_text(self, text):
 
-        try:
+        text = text.lower().strip()
 
-            percent = max(
-                0,
-                min(100, int(percent))
-            )
-
-            AudioManager = autoclass(
-                "android.media.AudioManager"
-            )
-
-            Context = autoclass(
-                "android.content.Context"
-            )
-
-            audio = self.activity.getSystemService(
-                Context.AUDIO_SERVICE
-            )
-
-            maximum = audio.getStreamMaxVolume(
-                AudioManager.STREAM_MUSIC
-            )
-
-            value = round(
-                maximum * percent / 100.0
-            )
-
-            audio.setStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                value,
-                AudioManager.FLAG_SHOW_UI,
-            )
-
-            self.set_status(
-                f"تم ضبط صوت الوسائط على {percent}٪."
-            )
-
-            return True
-
-        except Exception as exc:
-
-            self.set_status(
-                f"تعذر ضبط الصوت: {exc}"
-            )
-
-            return False
-
-    def _open_write_settings(self):
-
-        try:
-
-            Settings = autoclass(
-                "android.provider.Settings"
-            )
-
-            if Settings.System.canWrite(
-                self.activity
-            ):
-
-                return True
-
-            intent = self.Intent(
-                Settings.ACTION_MANAGE_WRITE_SETTINGS
-            )
-
-            Uri = autoclass(
-                "android.net.Uri"
-            )
-
-            intent.setData(
-                Uri.parse(
-                    "package:" +
-                    self.activity.getPackageName()
-                )
-            )
-
-            self.activity.startActivity(
-                intent
-            )
-
-            self.set_status(
-                "اسمح للتطبيق بتعديل إعدادات النظام، ثم أعد أمر السطوع."
-            )
-
-            return False
-
-        except Exception as exc:
-
-            self.set_status(
-                f"تعذر طلب صلاحية السطوع: {exc}"
-            )
-
-            return False
-
-    def set_brightness_percent(self, percent):
-
-        try:
-
-            percent = max(
-                1,
-                min(100, int(percent))
-            )
-
-            if not self._open_write_settings():
-                return False
-
-            Settings = autoclass(
-                "android.provider.Settings"
-            )
-
-            value = round(
-                255 * percent / 100.0
-            )
-
-            Settings.System.putInt(
-                self.activity.getContentResolver(),
-                Settings.System.SCREEN_BRIGHTNESS,
-                value,
-            )
-
-            self.set_status(
-                f"تم ضبط السطوع على {percent}٪."
-            )
-
-            return True
-
-        except Exception as exc:
-
-            self.set_status(
-                f"تعذر ضبط السطوع: {exc}"
-            )
-
-            return False
-
-    def open_wifi(self):
-
-        return self.open_settings(
-            "android.settings.WIFI_SETTINGS"
+        text = text.replace(
+            "أ", "ا"
+        ).replace(
+            "إ", "ا"
+        ).replace(
+            "آ", "ا"
         )
 
-    def open_bluetooth(self):
-
-        return self.open_settings(
-            "android.settings.BLUETOOTH_SETTINGS"
+        text = re.sub(
+            r"[ًٌٍَُِّْـ]",
+            "",
+            text
         )
 
-    def open_display(self):
+        return text
 
-        return self.open_settings(
-            "android.settings.DISPLAY_SETTINGS"
-        )
+    # --------------------------------------------------------
+    # تنفيذ الأوامر
+    # --------------------------------------------------------
 
-    def open_general_settings(self):
+    def execute_command(self, text):
 
-        return self.open_settings(
-            "android.settings.SETTINGS"
-        )
+        original = text
+        text = self.normalize_text(text)
 
-    # ---------------- Commands ----------------
+        # -----------------------------
+        # الصوت
+        # -----------------------------
 
-    def execute_command(self, command):
-
-        c = command.strip().lower()
-
-        normalized = (
-            c.replace("أ", "ا")
-             .replace("إ", "ا")
-             .replace("آ", "ا")
-        )
-
-        # Wi-Fi settings
         if (
-            "اعدادات الواي فاي" in normalized
-            or "اعدادات wifi" in normalized
+            "ارفع الصوت" in text
+            or "علي الصوت" in text
+            or "رفع الصوت" in text
+            or "زد الصوت" in text
         ):
 
-            self.open_wifi()
+            self.volume_up()
+
+            self.set_status(
+                "🔊 تم رفع الصوت."
+            )
+
             return
 
-        # Bluetooth settings
-        if "اعدادات البلوتوث" in normalized:
-
-            self.open_bluetooth()
-            return
-
-        # Display settings
         if (
-            "اعدادات الشاشه" in normalized
-            or "اعدادات الشاشة" in c
+            "اخفض الصوت" in text
+            or "نزل الصوت" in text
+            or "خفض الصوت" in text
+            or "قلل الصوت" in text
         ):
 
-            self.open_display()
+            self.volume_down()
+
+            self.set_status(
+                "🔉 تم خفض الصوت."
+            )
+
             return
 
-        # General settings
         if (
-            "افتح الاعدادات" in normalized
-            or "افتح الإعدادات" in c
+            "كتم الصوت" in text
+            or "اكتم الصوت" in text
+            or "صامت" in text
+        ):
+
+            self.volume_mute()
+
+            self.set_status(
+                "🔇 تم كتم الصوت."
+            )
+
+            return
+
+        # -----------------------------
+        # السطوع
+        # -----------------------------
+
+        if (
+            "ارفع السطوع" in text
+            or "علي السطوع" in text
+            or "زد السطوع" in text
+        ):
+
+            self.brightness_up()
+
+            return
+
+        if (
+            "اخفض السطوع" in text
+            or "خفض السطوع" in text
+            or "قلل السطوع" in text
+        ):
+
+            self.brightness_down()
+
+            return
+
+        # -----------------------------
+        # Wi-Fi
+        # -----------------------------
+
+        if (
+            "واي فاي" in text
+            or "وايفاي" in text
+            or "wifi" in text
+        ):
+
+            self.open_wifi_settings()
+
+            return
+
+        # -----------------------------
+        # Bluetooth
+        # -----------------------------
+
+        if (
+            "بلوتوث" in text
+            or "bluetooth" in text
+        ):
+
+            self.open_bluetooth_settings()
+
+            return
+
+        # -----------------------------
+        # الشاشة
+        # -----------------------------
+
+        if (
+            "اعدادات الشاشة" in text
+            or "الشاشة" in text
+        ):
+
+            self.open_display_settings()
+
+            return
+
+        # -----------------------------
+        # الإعدادات العامة
+        # -----------------------------
+
+        if (
+            "افتح الاعدادات" in text
+            or "اعدادات الهاتف" in text
+            or "اعدادات الجهاز" in text
         ):
 
             self.open_general_settings()
-            return
-
-        # Wi-Fi
-        if (
-            "واي فاي" in normalized
-            or "wifi" in normalized
-        ):
-
-            self.open_wifi()
-
-            self.set_status(
-                "فتحت إعدادات Wi-Fi لتشغيلها أو إيقافها."
-            )
-
-            return
-
-        # Bluetooth
-        if (
-            "بلوتوث" in normalized
-            or "bluetooth" in normalized
-        ):
-
-            self.open_bluetooth()
-
-            self.set_status(
-                "فتحت إعدادات Bluetooth."
-            )
-
-            return
-
-        # Mute
-        if (
-            "كتم الصوت" in normalized
-            or normalized == "اكتم"
-        ):
-
-            self.adjust_volume(
-                "mute"
-            )
-
-            return
-
-        # Volume percentage
-        m = re.search(
-            r"(?:صوت|مستوى الصوت)\s*(\d{1,3})"
-            r"\s*(?:بالمئة|بالمائة|٪|%)?",
-            normalized
-        )
-
-        if m:
-
-            self.set_volume_percent(
-                m.group(1)
-            )
-
-            return
-
-        # Increase volume
-        if any(
-            x in normalized
-            for x in [
-                "ارفع الصوت",
-                "علي الصوت",
-                "اعلى الصوت",
-            ]
-        ):
-
-            self.adjust_volume(
-                "up"
-            )
-
-            return
-
-        # Decrease volume
-        if any(
-            x in normalized
-            for x in [
-                "اخفض الصوت",
-                "وطي الصوت",
-                "خفض الصوت",
-            ]
-        ):
-
-            self.adjust_volume(
-                "down"
-            )
-
-            return
-
-        # Brightness percentage
-        m = re.search(
-            r"(?:سطوع|اضاءة|إضاءة)\s*(\d{1,3})"
-            r"\s*(?:بالمئة|بالمائة|٪|%)?",
-            c
-        )
-
-        if m:
-
-            self.set_brightness_percent(
-                m.group(1)
-            )
-
-            return
-
-        # Increase brightness
-        if any(
-            x in normalized
-            for x in [
-                "ارفع السطوع",
-                "زود السطوع",
-                "ارفع الاضاءة",
-                "ارفع الاضاءه",
-            ]
-        ):
-
-            self.set_brightness_percent(
-                100
-            )
-
-            return
-
-        # Decrease brightness
-        if any(
-            x in normalized
-            for x in [
-                "اخفض السطوع",
-                "قلل السطوع",
-                "اخفض الاضاءة",
-                "اخفض الاضاءه",
-            ]
-        ):
-
-            self.set_brightness_percent(
-                20
-            )
 
             return
 
         self.set_status(
-            "لم أجد أمرًا مطابقًا. اضغط «الأوامر» لرؤية الأمثلة."
+            f"لم أتعرف على الأمر: {original}"
         )
 
+    # ========================================================
+    # الصوت
+    # ========================================================
+
+    def get_audio_manager(self):
+
+        return self.activity.getSystemService(
+            self.AudioManager.AUDIO_SERVICE
+        )
+
+    def volume_up(self):
+
+        try:
+
+            manager = self.get_audio_manager()
+
+            manager.adjustStreamVolume(
+                self.AudioManager.STREAM_MUSIC,
+                self.AudioManager.ADJUST_RAISE,
+                0
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر رفع الصوت: {e}"
+            )
+
+    def volume_down(self):
+
+        try:
+
+            manager = self.get_audio_manager()
+
+            manager.adjustStreamVolume(
+                self.AudioManager.STREAM_MUSIC,
+                self.AudioManager.ADJUST_LOWER,
+                0
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر خفض الصوت: {e}"
+            )
+
+    def volume_mute(self):
+
+        try:
+
+            manager = self.get_audio_manager()
+
+            manager.adjustStreamVolume(
+                self.AudioManager.STREAM_MUSIC,
+                self.AudioManager.ADJUST_MUTE,
+                0
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر كتم الصوت: {e}"
+            )
+
+    # ========================================================
+    # السطوع
+    # ========================================================
+
+    def brightness_up(self):
+
+        try:
+
+            SettingsSystem = self.Settings.System
+
+            if not SettingsSystem.canWrite(
+                self.activity
+            ):
+
+                self.set_status(
+                    "اسمح للتطبيق بتعديل إعدادات النظام أولاً."
+                )
+
+                intent = self.Intent(
+                    self.Settings.ACTION_MANAGE_WRITE_SETTINGS
+                )
+
+                self.activity.startActivity(intent)
+
+                return
+
+            current = SettingsSystem.getInt(
+                self.activity.getContentResolver(),
+                SettingsSystem.SCREEN_BRIGHTNESS
+            )
+
+            value = min(
+                255,
+                current + 30
+            )
+
+            SettingsSystem.putInt(
+                self.activity.getContentResolver(),
+                SettingsSystem.SCREEN_BRIGHTNESS,
+                value
+            )
+
+            self.set_status(
+                "💡 تم رفع السطوع."
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر تغيير السطوع: {e}"
+            )
+
+    def brightness_down(self):
+
+        try:
+
+            SettingsSystem = self.Settings.System
+
+            if not SettingsSystem.canWrite(
+                self.activity
+            ):
+
+                self.set_status(
+                    "اسمح للتطبيق بتعديل إعدادات النظام أولاً."
+                )
+
+                intent = self.Intent(
+                    self.Settings.ACTION_MANAGE_WRITE_SETTINGS
+                )
+
+                self.activity.startActivity(intent)
+
+                return
+
+            current = SettingsSystem.getInt(
+                self.activity.getContentResolver(),
+                SettingsSystem.SCREEN_BRIGHTNESS
+            )
+
+            value = max(
+                1,
+                current - 30
+            )
+
+            SettingsSystem.putInt(
+                self.activity.getContentResolver(),
+                SettingsSystem.SCREEN_BRIGHTNESS,
+                value
+            )
+
+            self.set_status(
+                "💡 تم خفض السطوع."
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر تغيير السطوع: {e}"
+            )
+
+    # ========================================================
+    # فتح إعدادات Android
+    # ========================================================
+
+    def open_wifi_settings(self):
+
+        try:
+
+            intent = self.Intent(
+                "android.settings.WIFI_SETTINGS"
+            )
+
+            self.activity.startActivity(intent)
+
+            self.set_status(
+                "📶 تم فتح إعدادات Wi-Fi."
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر فتح Wi-Fi: {e}"
+            )
+
+    def open_bluetooth_settings(self):
+
+        try:
+
+            intent = self.Intent(
+                "android.settings.BLUETOOTH_SETTINGS"
+            )
+
+            self.activity.startActivity(intent)
+
+            self.set_status(
+                "🔵 تم فتح إعدادات Bluetooth."
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر فتح Bluetooth: {e}"
+            )
+
+    def open_display_settings(self):
+
+        try:
+
+            intent = self.Intent(
+                "android.settings.DISPLAY_SETTINGS"
+            )
+
+            self.activity.startActivity(intent)
+
+            self.set_status(
+                "📱 تم فتح إعدادات الشاشة."
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر فتح إعدادات الشاشة: {e}"
+            )
+
+    def open_general_settings(self):
+
+        try:
+
+            intent = self.Intent(
+                "android.settings.SETTINGS"
+            )
+
+            self.activity.startActivity(intent)
+
+            self.set_status(
+                "⚙️ تم فتح إعدادات الهاتف."
+            )
+
+        except Exception as e:
+
+            self.set_status(
+                f"تعذر فتح الإعدادات: {e}"
+            )
+
+    # ========================================================
+    # أدوات الواجهة
+    # ========================================================
+
+    def set_status(self, text):
+
+        def update(_dt):
+
+            if hasattr(
+                self,
+                "status_label"
+            ):
+                self.status_label.text = text
+
+        Clock.schedule_once(
+            update,
+            0
+        )
+
+    def set_listening(self, value):
+
+        self.is_listening = value
+
+        def update(_dt):
+
+            if hasattr(
+                self,
+                "listen_button"
+            ):
+
+                self.listen_button.text = (
+                    "⏹️ إيقاف الاستماع"
+                    if value
+                    else
+                    "🎙️ بدء الاستماع"
+                )
+
+        Clock.schedule_once(
+            update,
+            0
+        )
+
+    def clear_result(self):
+
+        self.result_label.text = (
+            "لم يتم التعرف على أي أمر بعد"
+        )
+
+        self.set_status(
+            "جاهز للاستماع."
+        )
+
+    def show_help(self):
+
+        self.result_label.text = (
+            "مثال:\n"
+            "ارفع الصوت\n"
+            "اخفض الصوت\n"
+            "كتم الصوت\n"
+            "ارفع السطوع\n"
+            "اخفض السطوع\n"
+            "افتح الواي فاي\n"
+            "افتح البلوتوث\n"
+            "افتح إعدادات الشاشة\n"
+            "افتح الإعدادات"
+        )
+
+        self.set_status(
+            "🎙️ قل أحد الأوامر السابقة."
+        )
+
+
+# ============================================================
+# تشغيل التطبيق
+# ============================================================
 
 if __name__ == "__main__":
     VoiceControlApp().run()

@@ -4,8 +4,15 @@ from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.core.text import LabelBase
 from kivy.clock import Clock
+from kivy.utils import platform
+
 
 FONT_FILE = "NotoKufiArabic-VariableFont_wght.ttf"
+
+
+# =========================
+# الخط العربي
+# =========================
 
 try:
     LabelBase.register(
@@ -45,16 +52,15 @@ class VoiceControlApp(App):
             spacing=20,
         )
 
-        layout.add_widget(
-            Label(
-                text="التحكم الصوتي",
-                font_name=ARABIC_FONT,
-                font_size=28,
-                size_hint_y=None,
-                height=80,
-            )
+        title = Label(
+            text="التحكم الصوتي",
+            font_name=ARABIC_FONT,
+            font_size=28,
+            size_hint_y=None,
+            height=80,
         )
 
+        layout.add_widget(title)
         layout.add_widget(self.status_label)
         layout.add_widget(self.result_label)
 
@@ -75,7 +81,19 @@ class VoiceControlApp(App):
         return layout
 
 
+    # =========================
+    # طلب صلاحية الميكروفون
+    # =========================
+
     def start_listening(self, *args):
+
+        if platform != "android":
+
+            self.status_label.text = (
+                "هذه الخاصية تعمل على Android فقط"
+            )
+
+            return
 
         try:
 
@@ -94,7 +112,7 @@ class VoiceControlApp(App):
 
             Clock.schedule_once(
                 self.open_recognizer,
-                1.5
+                1.0
             )
 
         except Exception as e:
@@ -106,11 +124,16 @@ class VoiceControlApp(App):
             self.result_label.text = str(e)
 
 
+    # =========================
+    # فتح التعرف الصوتي
+    # =========================
+
     def open_recognizer(self, dt):
 
         try:
 
             from android import activity
+
             from jnius import autoclass
 
             Intent = autoclass(
@@ -119,6 +142,10 @@ class VoiceControlApp(App):
 
             RecognizerIntent = autoclass(
                 "android.speech.RecognizerIntent"
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
             )
 
             intent = Intent(
@@ -135,4 +162,131 @@ class VoiceControlApp(App):
                 "ar-YE"
             )
 
-            intent
+            intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
+                "ar-YE"
+            )
+
+            intent.putExtra(
+                RecognizerIntent.EXTRA_PROMPT,
+                "تحدث الآن"
+            )
+
+            # تسجيل استقبال النتيجة
+            activity.bind(
+                on_activity_result=self.on_activity_result
+            )
+
+            # الحصول على Activity الحالية
+            current_activity = PythonActivity.mActivity
+
+            # فتح واجهة التعرف الصوتي
+            current_activity.startActivityForResult(
+                intent,
+                self.REQUEST_CODE
+            )
+
+            self.status_label.text = (
+                "🎤 تحدث الآن..."
+            )
+
+        except Exception as e:
+
+            self.status_label.text = (
+                "تعذر فتح التعرف الصوتي"
+            )
+
+            self.result_label.text = str(e)
+
+
+    # =========================
+    # استقبال نتيجة الكلام
+    # =========================
+
+    def on_activity_result(
+        self,
+        request_code,
+        result_code,
+        intent
+    ):
+
+        try:
+
+            if request_code != self.REQUEST_CODE:
+                return
+
+            from android import activity
+
+            # إلغاء التسجيل بعد وصول النتيجة
+            try:
+
+                activity.unbind(
+                    on_activity_result=self.on_activity_result
+                )
+
+            except Exception:
+                pass
+
+            if intent is None:
+
+                self.status_label.text = (
+                    "لم يتم الحصول على نتيجة"
+                )
+
+                return
+
+            from jnius import autoclass
+
+            RecognizerIntent = autoclass(
+                "android.speech.RecognizerIntent"
+            )
+
+            results = (
+                intent.getStringArrayListExtra(
+                    RecognizerIntent.EXTRA_RESULTS
+                )
+            )
+
+            if results is None:
+
+                self.status_label.text = (
+                    "لم يتم التعرف على الكلام"
+                )
+
+                return
+
+            if results.size() == 0:
+
+                self.status_label.text = (
+                    "لم يتم التعرف على الكلام"
+                )
+
+                return
+
+            text = str(
+                results.get(0)
+            )
+
+            self.result_label.text = (
+                "قلت:\n\n" + text
+            )
+
+            self.status_label.text = (
+                "تم التعرف على الكلام"
+            )
+
+        except Exception as e:
+
+            self.status_label.text = (
+                "حدث خطأ في النتيجة"
+            )
+
+            self.result_label.text = str(e)
+
+
+# =========================
+# تشغيل التطبيق
+# =========================
+
+if __name__ == "__main__":
+    VoiceControlApp().run()

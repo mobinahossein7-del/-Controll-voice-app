@@ -1,1524 +1,238 @@
 # -*- coding: utf-8 -*-
 
-import os
-import re
-import unicodedata
-
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.core.text import LabelBase
 from kivy.metrics import dp
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.properties import ColorProperty, StringProperty
+from kivy.graphics import Color, RoundedRectangle, Ellipse
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
-from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
-from kivy.uix.popup import Popup
-
-import arabic_reshaper
-from bidi.algorithm import get_display
-
-
-# ============================================================
-# الخط
-# ============================================================
-
-FONT = "NotoKufiArabic-VariableFont_wght.ttf"
-
-
-# ============================================================
-# Android
-# ============================================================
-
-ANDROID = False
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.screenmanager import ScreenManager, Screen
 
 try:
-    from android import activity
-    from android.permissions import request_permissions, Permission
-    from jnius import autoclass
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+except Exception:
+    arabic_reshaper = None
+    get_display = None
+
+try:
+    from android.permissions import (
+        Permission,
+        check_permission,
+        request_permissions
+    )
     ANDROID = True
 except Exception:
     ANDROID = False
 
-
-if ANDROID:
-    Intent = autoclass("android.content.Intent")
-    Uri = autoclass("android.net.Uri")
-    Settings = autoclass("android.provider.Settings")
-    AudioManager = autoclass("android.media.AudioManager")
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
+try:
+    from android import activity
+    from jnius import autoclass
+    JNIUS = True
+except Exception:
+    JNIUS = False
 
 
 # ============================================================
-# RTL
+# إعدادات عامة
 # ============================================================
+
+FONT = "NotoKufiArabic-VariableFont_wght.ttf"
+REQUEST_SPEECH = 7001
+
 
 def rtl(text):
+    """دعم عرض النص العربي من اليمين إلى اليسار."""
     text = str(text)
 
-    try:
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
-    except Exception:
-        return text
-
-
-def normalize_arabic(text):
-    text = str(text).strip().lower()
-
-    # إزالة التشكيل
-    text = "".join(
-        c for c in unicodedata.normalize("NFD", text)
-        if unicodedata.category(c) != "Mn"
-    )
-
-    text = text.replace("أ", "ا")
-    text = text.replace("إ", "ا")
-    text = text.replace("آ", "ا")
-    text = text.replace("ٱ", "ا")
-    text = text.replace("ـ", "")
+    if (
+        arabic_reshaper
+        and get_display
+        and any("\u0600" <= c <= "\u06ff" for c in text)
+    ):
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            pass
 
     return text
 
 
-def arabic_digits_to_ascii(text):
-    result = ""
-
-    for c in str(text):
-        try:
-            result += str(unicodedata.digit(c))
-        except Exception:
-            result += c
-
-    return result
+def contains_any(text, words):
+    return any(word in text for word in words)
 
 
 # ============================================================
-# الألوان
+# بطاقة احترافية
 # ============================================================
 
-LIGHT_BG = (0.96, 0.97, 0.99, 1)
-DARK_BG = (0.055, 0.065, 0.09, 1)
+class Card(ButtonBehavior, BoxLayout):
 
-LIGHT_TEXT = (0.08, 0.09, 0.12, 1)
-DARK_TEXT = (0.94, 0.95, 0.98, 1)
+    text = StringProperty("")
+    icon = StringProperty("")
+    subtitle = StringProperty("")
 
-BUTTON_LIGHT = (0.88, 0.91, 0.96, 1)
-BUTTON_DARK = (0.13, 0.15, 0.20, 1)
+    bg = ColorProperty(
+        (0.10, 0.12, 0.16, 1)
+    )
 
-
-# ============================================================
-# أدوات Android
-# ============================================================
-
-class AndroidController:
-
-    @staticmethod
-    def context():
-        if not ANDROID:
-            return None
-
-        return PythonActivity.mActivity
-
-    @staticmethod
-    def start_action(action, fallback=None):
-        if not ANDROID:
-            return False
-
-        ctx = AndroidController.context()
-
-        if ctx is None:
-            return False
-
-        try:
-            intent = Intent(action)
-            ctx.startActivity(intent)
-            return True
-
-        except Exception:
-            if fallback:
-                try:
-                    intent = Intent(fallback)
-                    ctx.startActivity(intent)
-                    return True
-                except Exception:
-                    pass
-
-        return False
-
-    @staticmethod
-    def start_panel(panel_action, fallback):
-        return AndroidController.start_action(
-            panel_action,
-            fallback
-        )
-
-    @staticmethod
-    def app_details():
-        if not ANDROID:
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            package_name = ctx.getPackageName()
-
-            intent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS
-            )
-
-            intent.setData(
-                Uri.parse("package:" + package_name)
-            )
-
-            ctx.startActivity(intent)
-            return True
-
-        except Exception:
-            return False
-
-    @staticmethod
-    def app_notifications():
-        if not ANDROID:
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            package_name = ctx.getPackageName()
-
-            intent = Intent(
-                "android.settings.APP_NOTIFICATION_SETTINGS"
-            )
-
-            intent.putExtra(
-                "android.provider.extra.APP_PACKAGE",
-                package_name
-            )
-
-            ctx.startActivity(intent)
-            return True
-
-        except Exception:
-            return AndroidController.start_action(
-                "android.settings.NOTIFICATION_SETTINGS"
-            )
-
-    @staticmethod
-    def write_settings_page():
-        if not ANDROID:
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            package_name = ctx.getPackageName()
-
-            intent = Intent(
-                "android.settings.action.MANAGE_WRITE_SETTINGS"
-            )
-
-            intent.setData(
-                Uri.parse("package:" + package_name)
-            )
-
-            ctx.startActivity(intent)
-            return True
-
-        except Exception:
-            return AndroidController.start_action(
-                "android.settings.SETTINGS"
-            )
-
-    @staticmethod
-    def can_write_settings():
-        if not ANDROID:
-            return False
-
-        try:
-            return bool(
-                Settings.System.canWrite(
-                    AndroidController.context()
-                )
-            )
-        except Exception:
-            return False
-
-    # --------------------------------------------------------
-    # الصوت
-    # --------------------------------------------------------
-
-    @staticmethod
-    def volume_up():
-        if not ANDROID:
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            audio = ctx.getSystemService("audio")
-
-            audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_RAISE,
-                0
-            )
-
-            return True
-
-        except Exception:
-            return False
-
-    @staticmethod
-    def volume_down():
-        if not ANDROID:
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            audio = ctx.getSystemService("audio")
-
-            audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_LOWER,
-                0
-            )
-
-            return True
-
-        except Exception:
-            return False
-
-    @staticmethod
-    def volume_mute():
-        if not ANDROID:
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            audio = ctx.getSystemService("audio")
-
-            audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_MUTE,
-                0
-            )
-
-            return True
-
-        except Exception:
-            try:
-                audio.setStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    0,
-                    0
-                )
-                return True
-            except Exception:
-                return False
-
-    # --------------------------------------------------------
-    # السطوع
-    # --------------------------------------------------------
-
-    @staticmethod
-    def set_brightness(percent):
-        if not ANDROID:
-            return False
-
-        if not AndroidController.can_write_settings():
-            AndroidController.start_action(
-                "android.settings.DISPLAY_SETTINGS"
-            )
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            resolver = ctx.getContentResolver()
-
-            # تحويل 0-100 إلى 0-255
-            value = int(
-                max(0, min(100, percent)) * 255 / 100
-            )
-
-            # إيقاف السطوع التلقائي قبل التحكم اليدوي
-            Settings.System.putInt(
-                resolver,
-                Settings.System.SCREEN_BRIGHTNESS_MODE,
-                0
-            )
-
-            Settings.System.putInt(
-                resolver,
-                Settings.System.SCREEN_BRIGHTNESS,
-                value
-            )
-
-            return True
-
-        except Exception:
-            return False
-
-    @staticmethod
-    def change_brightness(delta):
-        if not ANDROID:
-            return False
-
-        if not AndroidController.can_write_settings():
-            AndroidController.start_action(
-                "android.settings.DISPLAY_SETTINGS"
-            )
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            resolver = ctx.getContentResolver()
-
-            current = Settings.System.getInt(
-                resolver,
-                Settings.System.SCREEN_BRIGHTNESS,
-                128
-            )
-
-            percent = int(current * 100 / 255)
-            percent += delta
-            percent = max(0, min(100, percent))
-
-            return AndroidController.set_brightness(percent)
-
-        except Exception:
-            return False
-
-    # --------------------------------------------------------
-    # التدوير التلقائي
-    # --------------------------------------------------------
-
-    @staticmethod
-    def set_auto_rotate(enabled):
-        if not ANDROID:
-            return False
-
-        if not AndroidController.can_write_settings():
-            AndroidController.start_action(
-                "android.settings.DISPLAY_SETTINGS"
-            )
-            return False
-
-        try:
-            ctx = AndroidController.context()
-            resolver = ctx.getContentResolver()
-
-            Settings.System.putInt(
-                resolver,
-                Settings.System.ACCELEROMETER_ROTATION,
-                1 if enabled else 0
-            )
-
-            return True
-
-        except Exception:
-            return False
-
-    @staticmethod
-    def get_auto_rotate():
-        if not ANDROID:
-            return None
-
-        try:
-            ctx = AndroidController.context()
-            resolver = ctx.getContentResolver()
-
-            value = Settings.System.getInt(
-                resolver,
-                Settings.System.ACCELEROMETER_ROTATION,
-                1
-            )
-
-            return bool(value)
-
-        except Exception:
-            return None
-
-
-# ============================================================
-# الشاشة الرئيسية
-# ============================================================
-
-class HomeScreen(Screen):
+    radius = dp(18)
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        self.root_box = BoxLayout(
+        super().__init__(
             orientation="vertical",
-            padding=dp(16),
-            spacing=dp(10)
+            padding=(dp(14), dp(10)),
+            spacing=dp(3),
+            **kwargs
         )
 
-        self.add_widget(self.root_box)
+        self.size_hint_y = None
+        self.height = dp(88)
 
-    def build_ui(self):
+        self.bind(
+            pos=self._draw,
+            size=self._draw
+        )
 
-        self.root_box.clear_widgets()
+        with self.canvas.before:
+            self._color = Color(*self.bg)
 
-        app = App.get_running_app()
+            self._rect = RoundedRectangle(
+                pos=self.pos,
+                size=self.size,
+                radius=[self.radius]
+            )
 
-        title = Label(
-            text=rtl("التحكم الصوتي") if app.is_arabic
-            else "Voice Control",
-            font_name=FONT,
-            font_size=dp(25),
-            color=app.text_color,
+        self.icon_label = Label(
+            text=self.icon,
+            font_size=dp(24),
             size_hint_y=None,
-            height=dp(65)
+            height=dp(30),
+            halign="right",
+            font_name=FONT
         )
 
-        self.root_box.add_widget(title)
-
-        # ----------------------------------------------------
-        # اللغة
-        # ----------------------------------------------------
-
-        lang = Button(
-            text="English" if app.is_arabic else "العربية",
+        self.title_label = Label(
+            text=rtl(self.text),
             font_name=FONT,
-            size_hint_y=None,
-            height=dp(50)
+            font_size=dp(13),
+            bold=True,
+            halign="right",
+            valign="middle"
         )
 
-        lang.bind(
-            on_release=lambda x: app.toggle_language()
-        )
-
-        self.root_box.add_widget(lang)
-
-        # ----------------------------------------------------
-        # الحالة
-        # ----------------------------------------------------
-
-        self.status = Label(
-            text=rtl("جاهز للاستماع") if app.is_arabic
-            else "Ready",
+        self.subtitle_label = Label(
+            text=rtl(self.subtitle),
             font_name=FONT,
-            color=app.text_color,
-            size_hint_y=None,
-            height=dp(45)
+            font_size=dp(10),
+            opacity=0.72,
+            halign="right",
+            valign="middle"
         )
 
-        self.root_box.add_widget(self.status)
-
-        # ----------------------------------------------------
-        # النص المتعرف عليه
-        # ----------------------------------------------------
-
-        self.result_label = Label(
-            text=rtl("لم يتم التعرف على أمر بعد")
-            if app.is_arabic
-            else "No command yet",
-            font_name=FONT,
-            color=app.text_color,
-            halign="center",
-            valign="middle",
-            size_hint_y=None,
-            height=dp(70)
+        self.title_label.bind(
+            size=lambda w, _: setattr(
+                w,
+                "text_size",
+                (w.width, None)
+            )
         )
 
-        self.result_label.bind(
-            size=lambda instance, value:
-            setattr(instance, "text_size", value)
+        self.subtitle_label.bind(
+            size=lambda w, _: setattr(
+                w,
+                "text_size",
+                (w.width, None)
+            )
         )
 
-        self.root_box.add_widget(self.result_label)
+        self.add_widget(self.icon_label)
+        self.add_widget(self.title_label)
+        self.add_widget(self.subtitle_label)
 
-        # ----------------------------------------------------
-        # زر الميكروفون
-        # ----------------------------------------------------
-
-        mic = Button(
-            text="🎙️\n" + (
-                rtl("تحدث الآن")
-                if app.is_arabic
-                else "Speak now"
-            ),
-            font_name=FONT,
-            font_size=dp(21),
-            size_hint_y=None,
-            height=dp(120)
-        )
-
-        mic.bind(
-            on_release=lambda x: app.start_listening()
-        )
-
-        self.root_box.add_widget(mic)
-
-        # ----------------------------------------------------
-        # إدخال الأمر يدويًا
-        # ----------------------------------------------------
-
-        self.input_box = TextInput(
-            hint_text=(
-                "اكتب الأمر هنا"
-                if app.is_arabic
-                else "Type command here"
-            ),
-            multiline=False,
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(55)
-        )
-
-        self.root_box.add_widget(self.input_box)
-
-        execute = Button(
-            text=rtl("تنفيذ الأمر")
-            if app.is_arabic
-            else "Execute",
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(55)
-        )
-
-        execute.bind(
-            on_release=lambda x:
-            app.execute_command(self.input_box.text)
-        )
-
-        self.root_box.add_widget(execute)
-
-        # ----------------------------------------------------
-        # الاختصارات
-        # ----------------------------------------------------
-
-        quick = Button(
-            text=rtl("⚡ الاختصارات السريعة")
-            if app.is_arabic
-            else "⚡ Quick Actions",
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(58)
-        )
-
-        quick.bind(
-            on_release=lambda x:
-            app.sm.current = "settings"
-        )
-
-        self.root_box.add_widget(quick)
-
-        about = Button(
-            text=rtl("ℹ️ من نحن")
-            if app.is_arabic
-            else "ℹ️ About",
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(52)
-        )
-
-        about.bind(
-            on_release=lambda x:
-            app.sm.current = "about"
-        )
-
-        self.root_box.add_widget(about)
+    def _draw(self, *_):
+        if hasattr(self, "_rect"):
+            self._rect.pos = self.pos
+            self._rect.size = self.size
+            self._color.rgba = self.bg
 
 
 # ============================================================
-# شاشة الإعدادات
+# زر الميكروفون
 # ============================================================
 
-class SettingsScreen(Screen):
+class MicButton(ButtonBehavior, BoxLayout):
+
+    bg = ColorProperty(
+        (0.12, 0.48, 0.86, 1)
+    )
+
+    active_bg = ColorProperty(
+        (0.86, 0.20, 0.25, 1)
+    )
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        self.scroll = ScrollView()
-
-        self.content = GridLayout(
-            cols=1,
-            spacing=dp(8),
-            padding=dp(12),
-            size_hint_y=None
-        )
-
-        self.content.bind(
-            minimum_height=self.content.setter(
-                "height"
-            )
-        )
-
-        self.scroll.add_widget(self.content)
-        self.add_widget(self.scroll)
-
-    def section(self, title):
-
-        app = App.get_running_app()
-
-        label = Label(
-            text=rtl(title)
-            if app.is_arabic
-            else title,
-            font_name=FONT,
-            font_size=dp(19),
-            color=app.text_color,
-            size_hint_y=None,
-            height=dp(55)
-        )
-
-        self.content.add_widget(label)
-
-    def button(self, text, callback):
-
-        app = App.get_running_app()
-
-        b = Button(
-            text=rtl(text)
-            if app.is_arabic
-            else text,
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(58)
-        )
-
-        b.bind(on_release=lambda x: callback())
-
-        self.content.add_widget(b)
-
-    def build_ui(self):
-
-        self.content.clear_widgets()
-
-        app = App.get_running_app()
-
-        # ====================================================
-        # عنوان
-        # ====================================================
-
-        self.section(
-            "⚡ الاختصارات السريعة"
-        )
-
-        quick_actions = [
-
-            ("📶 Wi-Fi", "wifi"),
-            ("🟦 Bluetooth", "bluetooth"),
-            ("✈️ وضع الطيران", "airplane"),
-            ("📡 نقطة الاتصال", "hotspot"),
-            ("📱 بيانات الهاتف", "mobile_data"),
-            ("📍 الموقع", "location"),
-            ("NFC", "nfc"),
-            ("🌐 VPN", "vpn"),
-            ("🔄 التدوير التلقائي", "rotate"),
-            ("🔆 زيادة السطوع", "brightness_up"),
-            ("🔅 خفض السطوع", "brightness_down"),
-            ("🔊 رفع الصوت", "volume_up"),
-            ("🔉 خفض الصوت", "volume_down"),
-            ("🔇 كتم الصوت", "mute"),
-            ("🔋 توفير الطاقة", "battery_saver"),
-            ("🔕 عدم الإزعاج", "dnd"),
-            ("🌙 الوضع الداكن", "dark"),
-        ]
-
-        for text, key in quick_actions:
-            self.button(
-                text,
-                lambda key=key:
-                app.execute_quick(key)
-            )
-
-        # ====================================================
-        # الاتصال
-        # ====================================================
-
-        self.section("📶 الاتصال والشبكات")
-
-        network = [
-
-            ("Wi-Fi", "android.settings.WIFI_SETTINGS"),
-            ("Bluetooth", "android.settings.BLUETOOTH_SETTINGS"),
-            (
-                "شبكة الهاتف",
-                "android.settings.NETWORK_OPERATOR_SETTINGS"
-            ),
-            (
-                "بيانات الهاتف",
-                "android.settings.WIRELESS_SETTINGS"
-            ),
-            (
-                "نقطة الاتصال المحمولة",
-                "android.settings.TETHER_SETTINGS"
-            ),
-            (
-                "مشاركة الإنترنت",
-                "android.settings.TETHER_SETTINGS"
-            ),
-            (
-                "VPN",
-                "android.settings.VPN_SETTINGS"
-            ),
-            (
-                "NFC",
-                "android.settings.NFC_SETTINGS"
-            ),
-            (
-                "إعدادات الشبكة والإنترنت",
-                "android.settings.SETTINGS"
-            ),
-            (
-                "استخدام البيانات",
-                "android.settings.DATA_USAGE_SETTINGS"
-            ),
-        ]
-
-        for text, action in network:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(action)
-            )
-
-        # ====================================================
-        # الإشعارات
-        # ====================================================
-
-        self.section("🔔 الإشعارات")
-
-        self.button(
-            "إعدادات الإشعارات",
-            lambda:
-            app.open_setting(
-                "android.settings.NOTIFICATION_SETTINGS"
-            )
-        )
-
-        self.button(
-            "إشعارات التطبيق",
-            lambda:
-            app.open_app_notifications()
-        )
-
-        self.button(
-            "عدم الإزعاج",
-            lambda:
-            app.open_setting(
-                "android.settings.NOTIFICATION_POLICY_ACCESS_SETTINGS"
-            )
-        )
-
-        self.button(
-            "الوصول إلى الإشعارات",
-            lambda:
-            app.open_setting(
-                "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"
-            )
-        )
-
-        self.button(
-            "سجل الإشعارات",
-            lambda:
-            app.open_setting(
-                "android.settings.NOTIFICATION_HISTORY"
-            )
-        )
-
-        # ====================================================
-        # البطارية
-        # ====================================================
-
-        self.section("🔋 البطارية والخلفية")
-
-        battery = [
-            (
-                "البطارية",
-                "android.settings.BATTERY_SAVER_SETTINGS"
-            ),
-            (
-                "استخدام البطارية",
-                "android.settings.BATTERY_USAGE_SETTINGS"
-            ),
-            (
-                "توفير الطاقة",
-                "android.settings.BATTERY_SAVER_SETTINGS"
-            ),
-            (
-                "تحسين البطارية",
-                "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
-            ),
-            (
-                "التطبيقات التي تعمل في الخلفية",
-                "android.settings.APPLICATION_SETTINGS"
-            ),
-            (
-                "إعدادات البطارية للتطبيق",
-                "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
-            ),
-        ]
-
-        for text, action in battery:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(action)
-            )
-
-        # ====================================================
-        # النمط
-        # ====================================================
-
-        self.section("🎨 النمط والسمات")
-
-        self.button(
-            "الوضع الفاتح",
-            lambda:
-            app.set_theme(False)
-        )
-
-        self.button(
-            "الوضع الداكن",
-            lambda:
-            app.set_theme(True)
-        )
-
-        self.button(
-            "الوضع التلقائي",
-            lambda:
-            app.open_setting(
-                "android.settings.DISPLAY_SETTINGS"
-            )
-        )
-
-        self.button(
-            "السطوع",
-            lambda:
-            app.open_setting(
-                "android.settings.DISPLAY_SETTINGS"
-            )
-        )
-
-        self.button(
-            "حجم الشاشة",
-            lambda:
-            app.open_setting(
-                "android.settings.DISPLAY_SETTINGS"
-            )
-        )
-
-        self.button(
-            "الخط وحجم النص",
-            lambda:
-            app.open_setting(
-                "android.settings.FONT_SETTINGS"
-            )
-        )
-
-        # ====================================================
-        # الشاشة
-        # ====================================================
-
-        self.section("🖥️ الشاشة")
-
-        display = [
-            (
-                "إعدادات العرض",
-                "android.settings.DISPLAY_SETTINGS"
-            ),
-            (
-                "السطوع التلقائي",
-                "android.settings.DISPLAY_SETTINGS"
-            ),
-            (
-                "مهلة إيقاف الشاشة",
-                "android.settings.DISPLAY_SETTINGS"
-            ),
-            (
-                "معدل التحديث",
-                "android.settings.DISPLAY_SETTINGS"
-            ),
-            (
-                "التدوير التلقائي",
-                "android.settings.DISPLAY_SETTINGS"
-            ),
-        ]
-
-        for text, action in display:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(action)
-            )
-
-        # ====================================================
-        # الخصوصية والأمان
-        # ====================================================
-
-        self.section("🔐 الخصوصية والأمان")
-
-        security = [
-            (
-                "الخصوصية",
-                "android.settings.PRIVACY_SETTINGS"
-            ),
-            (
-                "الأمان",
-                "android.settings.SECURITY_SETTINGS"
-            ),
-            (
-                "الموقع",
-                "android.settings.LOCATION_SOURCE_SETTINGS"
-            ),
-            (
-                "أذونات التطبيق",
-                None
-            ),
-            (
-                "مدير الأذونات",
-                "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"
-            ),
-            (
-                "الكاميرا",
-                "android.settings.PRIVACY_SETTINGS"
-            ),
-            (
-                "الميكروفون",
-                "android.settings.PRIVACY_SETTINGS"
-            ),
-            (
-                "لوحة الخصوصية",
-                "android.settings.PRIVACY_SETTINGS"
-            ),
-        ]
-
-        for text, action in security:
-
-            if action is None:
-                self.button(
-                    text,
-                    lambda:
-                    app.open_app_details()
-                )
-            else:
-                self.button(
-                    text,
-                    lambda action=action:
-                    app.open_setting(action)
-                )
-
-        # ====================================================
-        # شاشة القفل والحماية
-        # ====================================================
-
-        self.section("🔒 شاشة القفل والحماية")
-
-        lock_items = [
-            (
-                "شاشة القفل",
-                "android.settings.SECURITY_SETTINGS"
-            ),
-            (
-                "كلمة المرور / PIN",
-                "android.settings.SECURITY_SETTINGS"
-            ),
-            (
-                "البصمة",
-                "android.settings.SECURITY_SETTINGS"
-            ),
-            (
-                "فتح الوجه",
-                "android.settings.SECURITY_SETTINGS"
-            ),
-            (
-                "الحماية",
-                "android.settings.SECURITY_SETTINGS"
-            ),
-            (
-                "العثور على الجهاز",
-                "android.settings.GOOGLE_SETTINGS"
-            ),
-            (
-                "مدير كلمات المرور",
-                "android.settings.GOOGLE_SETTINGS"
-            ),
-        ]
-
-        for text, action in lock_items:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(action)
-            )
-
-        # ====================================================
-        # الطوارئ
-        # ====================================================
-
-        self.section("🚨 الطوارئ والسلامة")
-
-        emergency = [
-            (
-                "إعدادات الطوارئ",
-                "android.settings.SAFETY_CENTER_SETTINGS"
-            ),
-            (
-                "معلومات الطوارئ",
-                "android.settings.SAFETY_CENTER_SETTINGS"
-            ),
-            (
-                "جهات اتصال الطوارئ",
-                "android.settings.SAFETY_CENTER_SETTINGS"
-            ),
-            (
-                "خدمات السلامة",
-                "android.settings.SAFETY_CENTER_SETTINGS"
-            ),
-        ]
-
-        for text, action in emergency:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(
-                    action,
-                    "android.settings.SECURITY_SETTINGS"
-                )
-            )
-
-        # ====================================================
-        # التحكم الأبوي
-        # ====================================================
-
-        self.section("👨‍👩‍👧 التحكم الأبوي")
-
-        self.button(
-            "التحكم الأبوي",
-            lambda:
-            app.open_setting(
-                "android.settings.FAMILY_CENTER"
-            )
-        )
-
-        self.button(
-            "الرفاهية الرقمية",
-            lambda:
-            app.open_setting(
-                "android.settings.DIGITAL_WELLBEING_SETTINGS"
-            )
-        )
-
-        self.button(
-            "وقت استخدام الجهاز",
-            lambda:
-            app.open_setting(
-                "android.settings.USAGE_ACCESS_SETTINGS"
-            )
-        )
-
-        # ====================================================
-        # التطبيقات
-        # ====================================================
-
-        self.section("📱 التطبيقات")
-
-        apps = [
-            (
-                "جميع التطبيقات",
-                "android.settings.APPLICATION_SETTINGS"
-            ),
-            (
-                "معلومات التطبيق",
-                None
-            ),
-            (
-                "التطبيقات الافتراضية",
-                "android.settings.MANAGE_DEFAULT_APPS_SETTINGS"
-            ),
-            (
-                "التطبيقات التي تظهر فوق التطبيقات",
-                "android.settings.action.MANAGE_OVERLAY_PERMISSION"
-            ),
-            (
-                "تثبيت التطبيقات من مصادر خارجية",
-                "android.settings.MANAGE_UNKNOWN_APP_SOURCES"
-            ),
-            (
-                "الوصول الخاص للتطبيقات",
-                "android.settings.MANAGE_SPECIAL_APP_ACCESS"
-            ),
-        ]
-
-        for text, action in apps:
-
-            if action is None:
-                self.button(
-                    text,
-                    lambda:
-                    app.open_app_details()
-                )
-            else:
-                self.button(
-                    text,
-                    lambda action=action:
-                    app.open_setting(action)
-                )
-
-        # ====================================================
-        # الحسابات والنسخ
-        # ====================================================
-
-        self.section("☁️ الحسابات والنسخ الاحتياطي")
-
-        cloud = [
-            (
-                "الحسابات",
-                "android.settings.SYNC_SETTINGS"
-            ),
-            (
-                "Google",
-                "android.settings.GOOGLE_SETTINGS"
-            ),
-            (
-                "النسخ الاحتياطي",
-                "android.settings.BACKUP_SETTINGS"
-            ),
-            (
-                "استعادة البيانات",
-                "android.settings.BACKUP_SETTINGS"
-            ),
-        ]
-
-        for text, action in cloud:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(action)
-            )
-
-        # ====================================================
-        # النظام
-        # ====================================================
-
-        self.section("⚙️ النظام")
-
-        system = [
-            (
-                "اللغة والإدخال",
-                "android.settings.LOCALE_SETTINGS"
-            ),
-            (
-                "التاريخ والوقت",
-                "android.settings.DATE_SETTINGS"
-            ),
-            (
-                "التخزين",
-                "android.settings.INTERNAL_STORAGE_SETTINGS"
-            ),
-            (
-                "إمكانية الوصول",
-                "android.settings.ACCESSIBILITY_SETTINGS"
-            ),
-            (
-                "تحديث البرنامج",
-                "android.settings.SYSTEM_UPDATE_SETTINGS"
-            ),
-            (
-                "إعدادات النظام المتقدمة",
-                "android.settings.SETTINGS"
-            ),
-            (
-                "معلومات الجهاز",
-                "android.settings.DEVICE_INFO_SETTINGS"
-            ),
-            (
-                "إعادة ضبط الهاتف",
-                "android.settings.BACKUP_AND_RESET_SETTINGS"
-            ),
-            (
-                "دليل المستخدم",
-                "android.settings.USER_GUIDE"
-            ),
-        ]
-
-        for text, action in system:
-            self.button(
-                text,
-                lambda action=action:
-                app.open_setting(action)
-            )
-
-        # ====================================================
-        # خيارات المطور
-        # ====================================================
-
-        self.section("👨‍💻 خيارات المطور")
-
-        self.button(
-            "خيارات المطور",
-            lambda:
-            app.open_setting(
-                "android.settings.APPLICATION_DEVELOPMENT_SETTINGS"
-            )
-        )
-
-        # ====================================================
-        # إعدادات التطبيق
-        # ====================================================
-
-        self.section("🎙️ إعدادات التطبيق")
-
-        self.button(
-            "لغة التعرف الصوتي",
-            lambda:
-            app.toggle_language()
-        )
-
-        self.button(
-            "تشغيل الاستماع",
-            lambda:
-            app.start_listening()
-        )
-
-        self.button(
-            "صفحة الأوامر",
-            lambda:
-            setattr(
-                app.sm,
-                "current",
-                "commands"
-            )
-        )
-
-        self.button(
-            "معلومات التطبيق",
-            lambda:
-            app.open_app_details()
-        )
-
-        # ====================================================
-        # من نحن
-        # ====================================================
-
-        self.button(
-            "ℹ️ من نحن",
-            lambda:
-            setattr(
-                app.sm,
-                "current",
-                "about"
-            )
-        )
-
-        # العودة
-        self.button(
-            "⬅️ الرئيسية",
-            lambda:
-            setattr(
-                app.sm,
-                "current",
-                "home"
-            )
-        )
-
-
-# ============================================================
-# شاشة الأوامر
-# ============================================================
-
-class CommandsScreen(Screen):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        self.scroll = ScrollView()
-
-        self.content = GridLayout(
-            cols=1,
-            spacing=dp(10),
-            padding=dp(15),
-            size_hint_y=None
-        )
-
-        self.content.bind(
-            minimum_height=self.content.setter(
-                "height"
-            )
-        )
-
-        self.scroll.add_widget(self.content)
-        self.add_widget(self.scroll)
-
-    def build_ui(self):
-
-        self.content.clear_widgets()
-
-        app = App.get_running_app()
-
-        title = Label(
-            text=rtl("الأوامر الصوتية")
-            if app.is_arabic
-            else "Voice Commands",
-            font_name=FONT,
-            font_size=dp(23),
-            color=app.text_color,
-            size_hint_y=None,
-            height=dp(70)
-        )
-
-        self.content.add_widget(title)
-
-        commands = [
-
-            "افتح الإعدادات",
-            "افتح الواي فاي",
-            "افتح البلوتوث",
-            "افتح نقطة الاتصال",
-            "افتح بيانات الهاتف",
-            "افتح وضع الطيران",
-            "افتح الموقع",
-            "افتح VPN",
-            "افتح NFC",
-            "شغل التدوير التلقائي",
-            "ارفع الصوت",
-            "اخفض الصوت",
-            "اكتم الصوت",
-            "ارفع السطوع",
-            "اخفض السطوع",
-            "اجعل السطوع 50 بالمئة",
-            "شغل توفير الطاقة",
-            "افتح عدم الإزعاج",
-            "افتح الخصوصية",
-            "افتح الأمان",
-            "افتح التطبيقات",
-            "افتح الشاشة",
-            "افتح التخزين",
-            "افتح إمكانية الوصول",
-            "افتح خيارات المطور",
-            "افتح تحديث البرنامج",
-            "افتح الحسابات",
-            "افتح النسخ الاحتياطي",
-            "من نحن",
-        ]
-
-        for command in commands:
-
-            label = Label(
-                text=rtl("• " + command)
-                if app.is_arabic
-                else "• " + command,
-                font_name=FONT,
-                color=app.text_color,
-                halign="right",
-                size_hint_y=None,
-                height=dp(48)
-            )
-
-            self.content.add_widget(label)
-
-        back = Button(
-            text=rtl("⬅️ العودة")
-            if app.is_arabic
-            else "⬅️ Back",
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(58)
-        )
-
-        back.bind(
-            on_release=lambda x:
-            setattr(
-                app.sm,
-                "current",
-                "home"
-            )
-        )
-
-        self.content.add_widget(back)
-
-
-# ============================================================
-# من نحن
-# ============================================================
-
-class AboutScreen(Screen):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        self.box = BoxLayout(
+        super().__init__(
             orientation="vertical",
-            padding=dp(25),
-            spacing=dp(15)
+            **kwargs
         )
 
-        self.add_widget(self.box)
+        self.size_hint_y = None
+        self.height = dp(150)
+        self.padding = dp(10)
 
-    def build_ui(self):
+        with self.canvas.before:
+            self._color = Color(*self.bg)
 
-        self.box.clear_widgets()
-
-        app = App.get_running_app()
-
-        title = Label(
-            text=rtl("ℹ️ من نحن")
-            if app.is_arabic
-            else "ℹ️ About",
-            font_name=FONT,
-            font_size=dp(26),
-            color=app.text_color,
-            size_hint_y=None,
-            height=dp(70)
-        )
-
-        self.box.add_widget(title)
-
-        text = (
-            "تطبيق للتحكم الصوتي وفتح إعدادات الهاتف "
-            "وتنفيذ الاختصارات السريعة.\n\n"
-            "المطور:\n"
-            "مهند الحمادي"
-        )
-
-        if not app.is_arabic:
-            text = (
-                "Voice control application for opening "
-                "Android settings and using quick actions.\n\n"
-                "Developer:\n"
-                "Mohand Al-Hammadi"
+            self._ellipse = Ellipse(
+                pos=self.pos,
+                size=(dp(132), dp(132))
             )
 
-        description = Label(
-            text=rtl(text)
-            if app.is_arabic
-            else text,
+        self.label = Label(
+            text=rtl("🎙️\nابدأ التحدث"),
             font_name=FONT,
-            font_size=dp(18),
-            color=app.text_color,
+            font_size=dp(16),
+            bold=True,
             halign="center",
             valign="middle"
         )
 
-        description.bind(
-            size=lambda instance, value:
-            setattr(instance, "text_size", value)
+        self.add_widget(self.label)
+
+        self.bind(
+            pos=self._draw,
+            size=self._draw
         )
 
-        self.box.add_widget(description)
-
-        back = Button(
-            text=rtl("⬅️ العودة")
-            if app.is_arabic
-            else "⬅️ Back",
-            font_name=FONT,
-            size_hint_y=None,
-            height=dp(58)
+    def _draw(self, *_):
+        d = min(
+            self.width - dp(8),
+            dp(140)
         )
 
-        back.bind(
-            on_release=lambda x:
-            setattr(
-                app.sm,
-                "current",
-                "home"
-            )
+        self._ellipse.size = (
+            d,
+            d
         )
 
-        self.box.add_widget(back)
+        self._ellipse.pos = (
+            self.center_x - d / 2,
+            self.center_y - d / 2
+        )
+
+        self._color.rgba = (
+            self.active_bg
+            if self.state == "down"
+            else self.bg
+        )
 
 
 # ============================================================
@@ -1527,487 +241,1252 @@ class AboutScreen(Screen):
 
 class VoiceControlApp(App):
 
+    title = "Voice Control"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self.is_arabic = True
-        self.language_code = "ar"
-
-        self.dark_mode = False
-
-        self.sm = ScreenManager()
-
+        self.language = "ar"
         self.listening = False
+        self.bound = False
 
-        self.REQUEST_CODE = 7412
+        self.status = None
+        self.result = None
+        self.mic = None
 
-        self.home = HomeScreen(name="home")
-        self.settings = SettingsScreen(name="settings")
-        self.commands = CommandsScreen(name="commands")
-        self.about = AboutScreen(name="about")
+        self.search_input = None
+        self.settings_content = None
 
-        self.sm.add_widget(self.home)
-        self.sm.add_widget(self.settings)
-        self.sm.add_widget(self.commands)
-        self.sm.add_widget(self.about)
+        self.all_setting_cards = []
 
-    # ========================================================
-    # الألوان
-    # ========================================================
+        self.dark = False
 
-    @property
-    def text_color(self):
-
-        if self.dark_mode:
-            return DARK_TEXT
-
-        return LIGHT_TEXT
-
-    # ========================================================
-    # بدء التطبيق
-    # ========================================================
+    # --------------------------------------------------------
+    # بناء التطبيق
+    # --------------------------------------------------------
 
     def build(self):
 
         Window.clearcolor = (
-            DARK_BG if self.dark_mode
-            else LIGHT_BG
+            0.035,
+            0.045,
+            0.06,
+            1
         )
 
-        self.rebuild_ui()
+        self.sm = ScreenManager()
+
+        self.sm.add_widget(
+            self.home_screen()
+        )
+
+        self.sm.add_widget(
+            self.settings_screen()
+        )
+
+        self.sm.add_widget(
+            self.commands_screen()
+        )
+
+        self.sm.add_widget(
+            self.about_screen()
+        )
 
         return self.sm
 
-    def on_start(self):
+    # --------------------------------------------------------
+    # إنشاء Label
+    # --------------------------------------------------------
 
-        if ANDROID:
+    def label(
+        self,
+        text,
+        size=15,
+        bold=False,
+        align="right",
+        color=None
+    ):
 
-            try:
-                activity.bind(
-                    on_activity_result=
-                    self.on_activity_result
-                )
-            except Exception:
-                pass
+        if color is None:
+            color = (
+                (0.94, 0.96, 0.99, 1)
+                if self.dark
+                else
+                (0.10, 0.12, 0.16, 1)
+            )
 
-    def on_stop(self):
+        w = Label(
+            text=rtl(text),
+            font_name=FONT,
+            font_size=dp(size),
+            bold=bold,
+            color=color,
+            halign=align,
+            valign="middle"
+        )
 
-        if ANDROID:
+        w.bind(
+            size=lambda o, _: setattr(
+                o,
+                "text_size",
+                (o.width, None)
+            )
+        )
 
-            try:
-                activity.unbind(
-                    on_activity_result=
-                    self.on_activity_result
-                )
-            except Exception:
-                pass
+        return w
+
+    # --------------------------------------------------------
+    # رأس الصفحة
+    # --------------------------------------------------------
+
+    def header(self, title, back=None):
+
+        row = BoxLayout(
+            size_hint_y=None,
+            height=dp(62),
+            spacing=dp(8)
+        )
+
+        if back:
+
+            b = Card(
+                text=back,
+                icon="‹",
+                subtitle="",
+                height=dp(52)
+            )
+
+            b.bind(
+                on_release=lambda *_:
+                self.goto(back)
+            )
+
+            row.add_widget(b)
+
+        row.add_widget(
+            self.label(
+                title,
+                22,
+                True,
+                "right"
+            )
+        )
+
+        return row
+
+    # --------------------------------------------------------
+    # الصفحة الرئيسية
+    # --------------------------------------------------------
+
+    def home_screen(self):
+
+        s = Screen(
+            name="home"
+        )
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(14),
+            spacing=dp(10)
+        )
+
+        root.add_widget(
+            self.label(
+                "التحكم الصوتي",
+                25,
+                True,
+                "right"
+            )
+        )
+
+        root.add_widget(
+            self.label(
+                "تحكم سريع وآمن في إعدادات Android بالصوت",
+                12,
+                False,
+                "right"
+            )
+        )
+
+        status_card = Card(
+            text="الحالة",
+            icon="●",
+            subtitle="جاهز للاستماع"
+        )
+
+        self.status = (
+            status_card.subtitle_label
+        )
+
+        root.add_widget(
+            status_card
+        )
+
+        self.result = self.label(
+            "لم يتم التعرف على أي كلام بعد.",
+            14,
+            False,
+            "center"
+        )
+
+        result_box = BoxLayout(
+            size_hint_y=None,
+            height=dp(72),
+            padding=dp(8)
+        )
+
+        result_box.add_widget(
+            self.result
+        )
+
+        root.add_widget(
+            result_box
+        )
+
+        self.mic = MicButton()
+
+        self.mic.bind(
+            on_release=self.toggle_listening
+        )
+
+        root.add_widget(
+            self.mic
+        )
+
+        quick = GridLayout(
+            cols=2,
+            spacing=dp(8),
+            size_hint_y=None
+        )
+
+        quick.bind(
+            minimum_height=quick.setter(
+                "height"
+            )
+        )
+
+        for title, icon, sub, action in [
+            (
+                "الاتصال",
+                "📶",
+                "Wi-Fi وBluetooth",
+                "wifi"
+            ),
+            (
+                "الشاشة",
+                "🖥️",
+                "السطوع والعرض",
+                "display"
+            ),
+            (
+                "البطارية",
+                "🔋",
+                "الطاقة والخلفية",
+                "battery"
+            ),
+            (
+                "الخصوصية",
+                "🔐",
+                "الأمان والأذونات",
+                "privacy"
+            ),
+        ]:
+
+            c = Card(
+                text=title,
+                icon=icon,
+                subtitle=sub,
+                height=dp(96)
+            )
+
+            c.bind(
+                on_release=lambda *_x,
+                a=action:
+                self.setting_action(a)
+            )
+
+            quick.add_widget(c)
+
+        root.add_widget(
+            quick
+        )
+
+        nav = GridLayout(
+            cols=4,
+            spacing=dp(6),
+            size_hint_y=None,
+            height=dp(62)
+        )
+
+        for text, icon, screen in [
+            ("الرئيسية", "⌂", "home"),
+            ("الإعدادات", "⚙", "settings"),
+            ("الأوامر", "🎙", "commands"),
+            ("من نحن", "ⓘ", "about")
+        ]:
+
+            c = Card(
+                text=text,
+                icon=icon,
+                subtitle="",
+                height=dp(58)
+            )
+
+            c.bind(
+                on_release=lambda *_x,
+                n=screen:
+                self.goto(n)
+            )
+
+            nav.add_widget(c)
+
+        root.add_widget(
+            nav
+        )
+
+        s.add_widget(root)
+
+        return s
+                self.search_input = TextInput(
+            hint_text=rtl("🔎 ابحث في الإعدادات..."),
+            font_name=FONT,
+            font_size=dp(13),
+            multiline=False,
+            size_hint_y=None,
+            height=dp(48),
+            padding=[dp(12), dp(12)]
+        )
+
+        self.search_input.bind(
+            text=self.filter_settings
+        )
+
+        root.add_widget(
+            self.search_input
+        )
+
+        scroll = ScrollView(
+            do_scroll_x=False
+        )
+
+        self.settings_content = BoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            padding=dp(4),
+            size_hint_y=None
+        )
+
+        self.settings_content.bind(
+            minimum_height=self.settings_content.setter(
+                "height"
+            )
+        )
+
+        self.build_settings()
+
+        scroll.add_widget(
+            self.settings_content
+        )
+
+        root.add_widget(
+            scroll
+        )
+
+        s.add_widget(root)
+
+        return s
 
     # ========================================================
-    # إعادة بناء الواجهة
+    # بناء قائمة الإعدادات
     # ========================================================
 
-    def rebuild_ui(self):
+    def build_settings(self):
 
-        self.home.build_ui()
-        self.settings.build_ui()
-        self.commands.build_ui()
-        self.about.build_ui()
+        sections = [
+
+            (
+                "📶 الاتصال والشبكات",
+                [
+                    (
+                        "Wi-Fi",
+                        "wifi",
+                        "الشبكات اللاسلكية",
+                        "📶"
+                    ),
+                    (
+                        "Bluetooth",
+                        "bluetooth",
+                        "الأجهزة القريبة",
+                        "ᛒ"
+                    ),
+                    (
+                        "شبكة الهاتف",
+                        "mobile",
+                        "الشريحة والشبكة",
+                        "📱"
+                    ),
+                    (
+                        "بيانات الهاتف",
+                        "data",
+                        "استخدام البيانات",
+                        "📊"
+                    ),
+                    (
+                        "نقطة الاتصال",
+                        "hotspot",
+                        "مشاركة الإنترنت",
+                        "📡"
+                    ),
+                    (
+                        "VPN",
+                        "vpn",
+                        "الشبكة الخاصة",
+                        "🔒"
+                    ),
+                    (
+                        "NFC",
+                        "nfc",
+                        "الاتصال قريب المدى",
+                        "NFC"
+                    ),
+                ]
+            ),
+
+            (
+                "🔔 الإشعارات",
+                [
+                    (
+                        "الإشعارات",
+                        "notifications",
+                        "إعدادات التنبيهات",
+                        "🔔"
+                    ),
+                    (
+                        "إشعارات التطبيق",
+                        "app_notifications",
+                        "هذا التطبيق",
+                        "📲"
+                    ),
+                    (
+                        "عدم الإزعاج",
+                        "do_not_disturb",
+                        "الصوت والتنبيهات",
+                        "🔕"
+                    ),
+                    (
+                        "الوصول إلى الإشعارات",
+                        "notification_access",
+                        "صلاحيات التنبيهات",
+                        "👁"
+                    ),
+                ]
+            ),
+
+            (
+                "🔋 البطارية والخلفية",
+                [
+                    (
+                        "البطارية",
+                        "battery",
+                        "حالة الطاقة",
+                        "🔋"
+                    ),
+                    (
+                        "استخدام البطارية",
+                        "battery_usage",
+                        "استهلاك التطبيقات",
+                        "📊"
+                    ),
+                    (
+                        "توفير الطاقة",
+                        "battery_saver",
+                        "إطالة عمر البطارية",
+                        "⚡"
+                    ),
+                    (
+                        "تحسين البطارية",
+                        "battery_optimization",
+                        "تحسين التطبيقات",
+                        "🛠"
+                    ),
+                ]
+            ),
+
+            (
+                "🎨 النمط والسمات",
+                [
+                    (
+                        "الوضع الفاتح",
+                        "theme_light",
+                        "مظهر التطبيق",
+                        "☀️"
+                    ),
+                    (
+                        "الوضع الداكن",
+                        "theme_dark",
+                        "مظهر التطبيق",
+                        "🌙"
+                    ),
+                    (
+                        "الوضع التلقائي",
+                        "theme_system",
+                        "حسب النظام",
+                        "◐"
+                    ),
+                ]
+            ),
+
+            (
+                "🖥️ الشاشة",
+                [
+                    (
+                        "السطوع",
+                        "brightness",
+                        "السطوع وإذن تعديل النظام",
+                        "☀️"
+                    ),
+                    (
+                        "إعدادات العرض",
+                        "display",
+                        "الشاشة والعرض",
+                        "🖥️"
+                    ),
+                ]
+            ),
+
+            (
+                "🔐 الخصوصية والحماية",
+                [
+                    (
+                        "الخصوصية",
+                        "privacy",
+                        "إعدادات الخصوصية",
+                        "🔐"
+                    ),
+                    (
+                        "الموقع",
+                        "location",
+                        "خدمات الموقع",
+                        "📍"
+                    ),
+                    (
+                        "أذونات التطبيق",
+                        "app_permissions",
+                        "صلاحيات التطبيق",
+                        "🛡"
+                    ),
+                    (
+                        "الأمان",
+                        "security",
+                        "الحماية وقفل الشاشة",
+                        "🛡"
+                    ),
+                ]
+            ),
+
+            (
+                "🚨 الطوارئ",
+                [
+                    (
+                        "الطوارئ",
+                        "emergency",
+                        "ميزات الطوارئ",
+                        "🚨"
+                    ),
+                ]
+            ),
+
+            (
+                "👤 الحسابات وGoogle",
+                [
+                    (
+                        "الحسابات",
+                        "accounts",
+                        "الحسابات والمزامنة",
+                        "👤"
+                    ),
+                    (
+                        "Google",
+                        "google",
+                        "خدمات Google",
+                        "G"
+                    ),
+                    (
+                        "النسخ الاحتياطي",
+                        "backup",
+                        "النسخ والاستعادة",
+                        "☁️"
+                    ),
+                ]
+            ),
+
+            (
+                "📱 التطبيقات",
+                [
+                    (
+                        "جميع التطبيقات",
+                        "apps",
+                        "إدارة التطبيقات",
+                        "📱"
+                    ),
+                    (
+                        "معلومات التطبيق",
+                        "app_details",
+                        "هذا التطبيق",
+                        "ℹ️"
+                    ),
+                    (
+                        "التطبيقات الافتراضية",
+                        "default_apps",
+                        "التطبيقات الأساسية",
+                        "⭐"
+                    ),
+                    (
+                        "الوصول الخاص",
+                        "special_access",
+                        "صلاحيات خاصة",
+                        "🔑"
+                    ),
+                    (
+                        "فوق التطبيقات الأخرى",
+                        "overlay",
+                        "العرض فوق التطبيقات",
+                        "▣"
+                    ),
+                ]
+            ),
+
+            (
+                "📊 المقاييس والاستخدام",
+                [
+                    (
+                        "استخدام البيانات",
+                        "data",
+                        "الشبكة",
+                        "📊"
+                    ),
+                    (
+                        "التخزين",
+                        "storage",
+                        "مساحة الهاتف",
+                        "💾"
+                    ),
+                    (
+                        "وقت استخدام الجهاز",
+                        "digital_wellbeing",
+                        "الرفاهية الرقمية",
+                        "⏱"
+                    ),
+                ]
+            ),
+
+            (
+                "⚙️ النظام والميزات المتقدمة",
+                [
+                    (
+                        "تحديث النظام",
+                        "system_update",
+                        "تحديث البرنامج",
+                        "↻"
+                    ),
+                    (
+                        "حول الهاتف",
+                        "about_device",
+                        "معلومات الجهاز",
+                        "ⓘ"
+                    ),
+                    (
+                        "خيارات المطور",
+                        "developer",
+                        "أدوات المطور",
+                        "👨‍💻"
+                    ),
+                    (
+                        "إمكانية الوصول",
+                        "accessibility",
+                        "ميزات الوصول",
+                        "♿"
+                    ),
+                    (
+                        "اللغة والإدخال",
+                        "language",
+                        "اللغة ولوحة المفاتيح",
+                        "文"
+                    ),
+                    (
+                        "التاريخ والوقت",
+                        "date",
+                        "الوقت والتاريخ",
+                        "🕒"
+                    ),
+                    (
+                        "إعادة ضبط الهاتف",
+                        "reset",
+                        "خيارات إعادة الضبط",
+                        "↺"
+                    ),
+                ]
+            ),
+
+            (
+                "👨‍👩‍👧 التحكم الأبوي",
+                [
+                    (
+                        "التحكم الأبوي",
+                        "parental",
+                        "إدارة العائلة",
+                        "👨‍👩‍👧"
+                    ),
+                    (
+                        "الرفاهية الرقمية",
+                        "digital_wellbeing",
+                        "وقت الشاشة",
+                        "⏱"
+                    ),
+                ]
+            ),
+
+            (
+                "🎙️ إعدادات التطبيق",
+                [
+                    (
+                        "العربية",
+                        "lang_ar",
+                        "لغة التعرف الصوتي",
+                        "🇸🇦"
+                    ),
+                    (
+                        "English",
+                        "lang_en",
+                        "Speech recognition",
+                        "🇺🇸"
+                    ),
+                    (
+                        "صفحة الأوامر",
+                        "commands",
+                        "الأوامر المتاحة",
+                        "🎙️"
+                    ),
+                    (
+                        "من نحن",
+                        "about_app",
+                        "المطور والمعلومات",
+                        "ⓘ"
+                    ),
+                ]
+            ),
+        ]
+
+        self.settings_content.clear_widgets()
+        self.all_setting_cards.clear()
+
+        for section, items in sections:
+
+            title = self.label(
+                section,
+                16,
+                True,
+                "right"
+            )
+
+            title.size_hint_y = None
+            title.height = dp(42)
+
+            self.settings_content.add_widget(
+                title
+            )
+
+            grid = GridLayout(
+                cols=2,
+                spacing=dp(7),
+                size_hint_y=None
+            )
+
+            grid.bind(
+                minimum_height=grid.setter(
+                    "height"
+                )
+            )
+
+            for caption, action, sub, icon in items:
+
+                card = Card(
+                    text=caption,
+                    icon=icon,
+                    subtitle=sub,
+                    height=dp(92)
+                )
+
+                card.action_key = action
+
+                card.search_text = (
+                    caption + " " + sub
+                ).lower()
+
+                card.bind(
+                    on_release=lambda *_x,
+                    a=action:
+                    self.setting_action(a)
+                )
+
+                grid.add_widget(card)
+
+                self.all_setting_cards.append(
+                    card
+                )
+
+            self.settings_content.add_widget(
+                grid
+            )
+
+    # ========================================================
+    # البحث داخل الإعدادات
+    # ========================================================
+
+    def filter_settings(self, *_):
+
+        query = (
+            self.search_input.text.strip().lower()
+            if self.search_input
+            else ""
+        )
+
+        for card in self.all_setting_cards:
+
+            visible = (
+                not query
+                or query in card.search_text
+            )
+
+            card.opacity = (
+                1 if visible else 0
+            )
+
+            card.disabled = not visible
+
+    # ========================================================
+    # صفحة الأوامر
+    # ========================================================
+
+    def commands_screen(self):
+
+        s = Screen(
+            name="commands"
+        )
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(16),
+            spacing=dp(10)
+        )
+
+        root.add_widget(
+            self.header(
+                "الأوامر الصوتية"
+            )
+        )
+
+        scroll = ScrollView(
+            do_scroll_x=False
+        )
+
+        text = (
+            "يمكنك قول:\n\n"
+
+            "• افتح الواي فاي\n"
+            "• افتح البلوتوث\n"
+            "• افتح شبكة الهاتف\n"
+            "• افتح نقطة الاتصال\n"
+            "• افتح الإشعارات\n"
+            "• افتح البطارية\n"
+            "• افتح الخصوصية\n"
+            "• افتح الموقع\n"
+            "• افتح الحماية\n"
+            "• افتح شاشة القفل\n"
+            "• افتح الطوارئ\n"
+            "• افتح الحسابات\n"
+            "• افتح النسخ الاحتياطي\n"
+            "• افتح Google\n"
+            "• افتح تحديث النظام\n"
+            "• افتح حول الهاتف\n"
+            "• افتح خيارات المطور\n"
+            "• افتح التحكم الأبوي\n"
+            "• ارفع الصوت\n"
+            "• اخفض الصوت\n"
+            "• كتم الصوت\n"
+            "• اجعل السطوع 50\n\n"
+
+            "English:\n"
+            "Open Wi-Fi\n"
+            "Open Bluetooth\n"
+            "Open settings\n"
+            "Open privacy\n"
+            "Open battery\n"
+            "Open developer options"
+        )
+
+        lab = self.label(
+            text,
+            15,
+            False,
+            "right"
+        )
+
+        lab.size_hint_y = None
+
+        lab.bind(
+            texture_size=lambda w, size:
+            setattr(
+                w,
+                "height",
+                size[1] + dp(20)
+            )
+        )
+
+        scroll.add_widget(lab)
+
+        root.add_widget(
+            scroll
+        )
+
+        s.add_widget(root)
+
+        return s
+
+    # ========================================================
+    # صفحة من نحن
+    # ========================================================
+
+    def about_screen(self):
+
+        s = Screen(
+            name="about"
+        )
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=dp(22),
+            spacing=dp(12)
+        )
+
+        root.add_widget(
+            self.label(
+                "من نحن",
+                28,
+                True,
+                "center"
+            )
+        )
+
+        root.add_widget(
+            self.label(
+                "Voice Control",
+                22,
+                True,
+                "center"
+            )
+        )
+
+        root.add_widget(
+            self.label(
+                "تطبيق للتحكم الصوتي وفتح إعدادات Android بسرعة، مع دعم العربية وEnglish.",
+                16,
+                False,
+                "center"
+            )
+        )
+
+        root.add_widget(
+            self.label(
+                "المطور: مهند الحمادي",
+                18,
+                True,
+                "center"
+            )
+        )
+
+        root.add_widget(
+            self.label(
+                "واجهة حديثة • أوامر صوتية • إعدادات منظمة",
+                13,
+                False,
+                "center"
+            )
+        )
+
+        root.add_widget(
+            self.button_back(
+                "العودة للرئيسية",
+                "home"
+            )
+        )
+
+        s.add_widget(root)
+
+        return s
+
+    # ========================================================
+    # زر الرجوع
+    # ========================================================
+
+    def button_back(
+        self,
+        text,
+        target
+    ):
+
+        c = Card(
+            text=text,
+            icon="‹",
+            subtitle="",
+            height=dp(58)
+        )
+
+        c.bind(
+            on_release=lambda *_:
+            self.goto(target)
+        )
+
+        return c
+
+    # ========================================================
+    # الانتقال بين الصفحات
+    # ========================================================
+
+    def goto(self, name):
+
+        if name == "الرئيسية":
+            name = "home"
+
+        self.sm.current = name
 
     # ========================================================
     # اللغة
     # ========================================================
 
-    def toggle_language(self):
+    def set_language(self, lang):
 
-        self.is_arabic = not self.is_arabic
+        self.language = lang
 
-        self.language_code = (
-            "ar" if self.is_arabic
-            else "en-US"
-        )
+        if lang == "ar":
 
-        self.rebuild_ui()
-
-    # ========================================================
-    # النمط
-    # ========================================================
-
-    def set_theme(self, dark):
-
-        self.dark_mode = bool(dark)
-
-        Window.clearcolor = (
-            DARK_BG if self.dark_mode
-            else LIGHT_BG
-        )
-
-        self.rebuild_ui()
-
-        self.notify(
-            "تم تفعيل الوضع الداكن"
-            if dark
-            else "تم تفعيل الوضع الفاتح"
-        )
-
-    # ========================================================
-    # إشعار
-    # ========================================================
-
-    def notify(self, message):
-
-        if self.is_arabic:
-            self.home.status.text = rtl(message)
-        else:
-            self.home.status.text = message
-
-    # ========================================================
-    # فتح إعدادات Android
-    # ========================================================
-
-    def open_setting(self, action, fallback=None):
-
-        success = AndroidController.start_action(
-            action,
-            fallback
-        )
-
-        if success:
-            self.notify(
-                "تم فتح الإعدادات"
-                if self.is_arabic
-                else "Settings opened"
+            self.set_status(
+                "لغة التعرف: العربية"
             )
 
         else:
-            self.notify(
-                "تعذر فتح هذه الصفحة على هذا الجهاز"
-                if self.is_arabic
-                else "This setting is unavailable"
-            )
 
-    def open_app_details(self):
-
-        if AndroidController.app_details():
-            self.notify(
-                "تم فتح معلومات التطبيق"
-                if self.is_arabic
-                else "App information opened"
-            )
-
-    def open_app_notifications(self):
-
-        if AndroidController.app_notifications():
-            self.notify(
-                "تم فتح إشعارات التطبيق"
-                if self.is_arabic
-                else "App notifications opened"
+            self.set_status(
+                "Recognition language: English"
             )
 
     # ========================================================
-    # الاختصارات
+    # حالة التطبيق
     # ========================================================
 
-    def execute_quick(self, key):
+    def set_status(self, text):
 
-        # Wi-Fi
-        if key == "wifi":
+        if self.status:
+            self.status.text = rtl(text)
 
-            AndroidController.start_panel(
-                "android.settings.panel.action.WIFI",
-                "android.settings.WIFI_SETTINGS"
+    # ========================================================
+    # تشغيل / إيقاف الاستماع
+    # ========================================================
+
+    def toggle_listening(self, *_):
+
+        if self.listening:
+
+            self.listening = False
+
+            self.set_status(
+                "تم إيقاف الاستماع"
             )
 
-            self.notify(
-                "تم فتح لوحة Wi-Fi"
-                if self.is_arabic
-                else "Wi-Fi panel opened"
+            self.mic.label.text = rtl(
+                "🎙️\nابدأ التحدث"
             )
 
-        # Bluetooth
-        elif key == "bluetooth":
+            return
 
-            AndroidController.start_panel(
-                "android.settings.panel.action.BLUETOOTH",
-                "android.settings.BLUETOOTH_SETTINGS"
-            )
+        self.start_listening()
 
-            self.notify(
-                "تم فتح لوحة Bluetooth"
-                if self.is_arabic
-                else "Bluetooth panel opened"
-            )
+    # ========================================================
+    # طلب إذن الميكروفون
+    # ========================================================
 
-        # وضع الطيران
-        elif key == "airplane":
+    def request_mic(self):
 
-            self.open_setting(
-                "android.settings.AIRPLANE_MODE_SETTINGS",
-                "android.settings.WIRELESS_SETTINGS"
-            )
+        if ANDROID:
 
-        # نقطة الاتصال
-        elif key == "hotspot":
+            try:
 
-            self.open_setting(
-                "android.settings.TETHER_SETTINGS",
-                "android.settings.WIRELESS_SETTINGS"
-            )
-
-        # بيانات الهاتف
-        elif key == "mobile_data":
-
-            AndroidController.start_panel(
-                "android.settings.panel.action.INTERNET_CONNECTIVITY",
-                "android.settings.WIRELESS_SETTINGS"
-            )
-
-            self.notify(
-                "تم فتح لوحة الاتصال"
-                if self.is_arabic
-                else "Connectivity panel opened"
-            )
-
-        # الموقع
-        elif key == "location":
-
-            AndroidController.start_panel(
-                "android.settings.panel.action.LOCATION",
-                "android.settings.LOCATION_SOURCE_SETTINGS"
-            )
-
-        # NFC
-        elif key == "nfc":
-
-            AndroidController.start_panel(
-                "android.settings.panel.action.NFC",
-                "android.settings.NFC_SETTINGS"
-            )
-
-        # VPN
-        elif key == "vpn":
-
-            self.open_setting(
-                "android.settings.VPN_SETTINGS"
-            )
-
-        # التدوير
-        elif key == "rotate":
-
-            current = AndroidController.get_auto_rotate()
-
-            if current is None:
-
-                self.open_setting(
-                    "android.settings.DISPLAY_SETTINGS"
-                )
-
-            else:
-
-                new_value = not current
-
-                if AndroidController.set_auto_rotate(
-                    new_value
+                if not check_permission(
+                    Permission.RECORD_AUDIO
                 ):
 
-                    self.notify(
-                        (
-                            "تم تشغيل التدوير التلقائي"
-                            if new_value
-                            else "تم إيقاف التدوير التلقائي"
-                        )
-                        if self.is_arabic
-                        else (
-                            "Auto rotation enabled"
-                            if new_value
-                            else "Auto rotation disabled"
-                        )
+                    request_permissions(
+                        [
+                            Permission.RECORD_AUDIO
+                        ],
+                        lambda *_: None
                     )
 
-                else:
+                    return False
 
-                    self.open_setting(
-                        "android.settings.DISPLAY_SETTINGS"
-                    )
+            except Exception:
+                pass
 
-        # زيادة السطوع
-        elif key == "brightness_up":
-
-            if AndroidController.change_brightness(10):
-
-                self.notify(
-                    "تم زيادة السطوع"
-                    if self.is_arabic
-                    else "Brightness increased"
-                )
-
-            else:
-
-                self.open_setting(
-                    "android.settings.DISPLAY_SETTINGS"
-                )
-
-        # خفض السطوع
-        elif key == "brightness_down":
-
-            if AndroidController.change_brightness(-10):
-
-                self.notify(
-                    "تم خفض السطوع"
-                    if self.is_arabic
-                    else "Brightness decreased"
-                )
-
-            else:
-
-                self.open_setting(
-                    "android.settings.DISPLAY_SETTINGS"
-                )
-
-        # الصوت
-        elif key == "volume_up":
-
-            if AndroidController.volume_up():
-
-                self.notify(
-                    "تم رفع الصوت"
-                    if self.is_arabic
-                    else "Volume increased"
-                )
-
-        elif key == "volume_down":
-
-            if AndroidController.volume_down():
-
-                self.notify(
-                    "تم خفض الصوت"
-                    if self.is_arabic
-                    else "Volume decreased"
-                )
-
-        elif key == "mute":
-
-            if AndroidController.volume_mute():
-
-                self.notify(
-                    "تم كتم الصوت"
-                    if self.is_arabic
-                    else "Sound muted"
-                )
-
-        # توفير الطاقة
-        elif key == "battery_saver":
-
-            self.open_setting(
-                "android.settings.BATTERY_SAVER_SETTINGS"
-            )
-
-        # عدم الإزعاج
-        elif key == "dnd":
-
-            self.open_setting(
-                "android.settings.NOTIFICATION_POLICY_ACCESS_SETTINGS",
-                "android.settings.NOTIFICATION_SETTINGS"
-            )
-
-        # الوضع الداكن
-        elif key == "dark":
-
-            self.set_theme(
-                not self.dark_mode
-            )
+        return True
 
     # ========================================================
-    # التعرف الصوتي
+    # بدء التطبيق
+    # ========================================================
+
+    def on_start(self):
+
+        if ANDROID and JNIUS and not self.bound:
+
+            try:
+
+                activity.bind(
+                    on_activity_result=
+                    self.on_activity_result
+                )
+
+                self.bound = True
+
+            except Exception as exc:
+
+                print(
+                    "activity bind:",
+                    exc
+                )
+
+        self.request_mic()
+
+    # ========================================================
+    # إيقاف التطبيق
+    # ========================================================
+
+    def on_stop(self):
+
+        if (
+            ANDROID
+            and JNIUS
+            and self.bound
+        ):
+
+            try:
+
+                activity.unbind(
+                    on_activity_result=
+                    self.on_activity_result
+                )
+
+            except Exception:
+                pass
+
+            self.bound = False
+
+    # ========================================================
+    # بدء التعرف الصوتي
     # ========================================================
 
     def start_listening(self):
 
-        if not ANDROID:
+        if not ANDROID or not JNIUS:
 
-            self.notify(
-                "التعرف الصوتي متاح على Android فقط"
-                if self.is_arabic
-                else "Voice recognition is available on Android"
+            self.set_status(
+                "التعرف الصوتي يعمل داخل APK على Android"
+            )
+
+            return
+
+        if not self.request_mic():
+
+            self.set_status(
+                "اسمح باستخدام الميكروفون ثم اضغط مرة أخرى"
             )
 
             return
 
         try:
 
-            request_permissions(
-                [Permission.RECORD_AUDIO]
+            Intent = autoclass(
+                "android.content.Intent"
             )
 
-        except Exception:
-            pass
+            RI = autoclass(
+                "android.speech.RecognizerIntent"
+            )
 
-        Clock.schedule_once(
-            lambda dt:
-            self._start_recognizer(),
-            0.7
-        )
-
-    def _start_recognizer(self):
-
-        if not ANDROID:
-            return
-
-        try:
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
 
             intent = Intent(
-                "android.speech.action.RECOGNIZE_SPEECH"
+                RI.ACTION_RECOGNIZE_SPEECH
             )
 
             intent.putExtra(
-                "android.speech.extra.LANGUAGE_MODEL",
-                "free_form"
+                RI.EXTRA_LANGUAGE_MODEL,
+                RI.LANGUAGE_MODEL_FREE_FORM
             )
 
             intent.putExtra(
-                "android.speech.extra.LANGUAGE",
-                self.language_code
+                RI.EXTRA_LANGUAGE,
+                self.language
             )
 
             intent.putExtra(
-                "android.speech.extra.LANGUAGE_PREFERENCE",
-                self.language_code
+                RI.EXTRA_LANGUAGE_PREFERENCE,
+                self.language
             )
 
             intent.putExtra(
-                "android.speech.extra.MAX_RESULTS",
+                RI.EXTRA_MAX_RESULTS,
                 5
             )
 
-            prompt = (
-                "تحدث الآن"
-                if self.is_arabic
-                else "Speak now"
-            )
-
             intent.putExtra(
-                "android.speech.extra.PROMPT",
-                prompt
-            )
-
-            PythonActivity.mActivity.startActivityForResult(
-                intent,
-                self.REQUEST_CODE
+                RI.EXTRA_PROMPT,
+                "تحدث الآن"
+                if self.language == "ar"
+                else
+                "Speak now"
             )
 
             self.listening = True
 
-            self.notify(
-                "استمع إليك الآن..."
-                if self.is_arabic
-                else "Listening..."
+            self.mic.label.text = rtl(
+                "⏹️\nجارٍ الاستماع"
             )
 
-        except Exception as e:
+            self.set_status(
+                "🎙️ استمع الآن..."
+            )
 
-            self.notify(
-                "تعذر تشغيل التعرف الصوتي"
-                if self.is_arabic
-                else "Could not start speech recognition"
+            PythonActivity.mActivity.startActivityForResult(
+                intent,
+                REQUEST_SPEECH
+            )
+
+        except Exception as exc:
+
+            self.listening = False
+
+            self.mic.label.text = rtl(
+                "🎙️\nابدأ التحدث"
+            )
+
+            self.set_status(
+                "تعذر فتح التعرف الصوتي"
+            )
+
+            print(
+                "speech intent:",
+                exc
             )
 
     # ========================================================
@@ -2021,626 +1500,1144 @@ class VoiceControlApp(App):
         intent
     ):
 
-        if request_code != self.REQUEST_CODE:
+        if int(request_code) != REQUEST_SPEECH:
             return
 
         self.listening = False
 
+        Clock.schedule_once(
+            lambda *_:
+            self.finish_result(intent),
+            0
+        )
+
+    # ========================================================
+    # معالجة النتيجة
+    # ========================================================
+
+    def finish_result(self, intent):
+
+        self.mic.label.text = rtl(
+            "🎙️\nابدأ التحدث"
+        )
+
+        if not intent:
+
+            self.set_status(
+                "لم يتم استلام نتيجة"
+            )
+
+            return
+
         try:
 
-            if intent is None:
-                return
-
-            results = intent.getStringArrayListExtra(
-                "android.speech.extra.RESULTS"
+            RI = autoclass(
+                "android.speech.RecognizerIntent"
             )
 
-            if results is None:
-                return
-
-            if results.size() == 0:
-                return
-
-            text = str(results.get(0))
-
-            self.home.result_label.text = (
-                rtl(text)
-                if self.is_arabic
-                else text
+            results = (
+                intent.getStringArrayListExtra(
+                    RI.EXTRA_RESULTS
+                )
             )
 
-            self.execute_command(text)
+            text = (
+                str(results.get(0))
+                if results and results.size()
+                else ""
+            )
+
+        except Exception as exc:
+
+            print(
+                "result:",
+                exc
+            )
+
+            text = ""
+
+        if text:
+
+            self.result.text = rtl(
+                text
+            )
+
+            self.set_status(
+                "✅ تم التعرف على الكلام"
+            )
+
+            self.handle_command(text)
+
+        else:
+
+            self.set_status(
+                "لم يتم التعرف على الكلام"
+            )
+
+    # ========================================================
+    # تنظيف النص
+    # ========================================================
+
+    def normalize(self, text):
+
+        t = text.strip().lower()
+
+        for a, b in [
+            ("أ", "ا"),
+            ("إ", "ا"),
+            ("آ", "ا"),
+            ("ة", "ه"),
+            ("ى", "ي")
+        ]:
+
+            t = t.replace(
+                a,
+                b
+            )
+
+        return " ".join(
+            t.split()
+        )
+
+    # ========================================================
+    # معالجة الأوامر
+    # ========================================================
+
+    def handle_command(self, text):
+
+        t = self.normalize(text)
+
+        if contains_any(
+            t,
+            [
+                "مساعده",
+                "الاوامر",
+                "help"
+            ]
+        ):
+
+            self.goto(
+                "commands"
+            )
+
+            return
+
+        if contains_any(
+            t,
+            [
+                "امسح",
+                "مسح",
+                "clear"
+            ]
+        ):
+
+            self.result.text = rtl(
+                "لم يتم التعرف على أي كلام بعد."
+            )
+
+            self.set_status(
+                "جاهز للاستماع"
+            )
+
+            return
+
+        if contains_any(
+            t,
+            [
+                "ارفع الصوت",
+                "علي الصوت",
+                "زيد الصوت",
+                "زود الصوت",
+                "increase volume",
+                "volume up"
+            ]
+        ):
+
+            self.audio_adjust(1)
+
+            return
+
+        if contains_any(
+            t,
+            [
+                "اخفض الصوت",
+                "وطي الصوت",
+                "نقص الصوت",
+                "خفض الصوت",
+                "انقص الصوت",
+                "decrease volume",
+                "volume down"
+            ]
+        ):
+
+            self.audio_adjust(-1)
+
+            return
+
+        if contains_any(
+            t,
+            [
+                "كتم الصوت",
+                "اكتم الصوت",
+                "صامت",
+                "mute"
+            ]
+        ):
+
+            self.audio_mute()
+
+            return
+
+        if contains_any(
+            t,
+            [
+                "السطوع",
+                "اضاءه الشاشه",
+                "brightness"
+            ]
+        ):
+
+            import re
+
+            match = re.search(
+                r"(\d{1,3})",
+                t
+            )
+
+            if match:
+
+                self.set_brightness(
+                    int(match.group(1))
+                )
+
+                return
+
+            if contains_any(
+                t,
+                [
+                    "ارفع",
+                    "زيد",
+                    "increase"
+                ]
+            ):
+
+                self.change_brightness(
+                    10
+                )
+
+                return
+
+            if contains_any(
+                t,
+                [
+                    "اخفض",
+                    "نقص",
+                    "decrease"
+                ]
+            ):
+
+                self.change_brightness(
+                    -10
+                )
+
+                return
+
+        commands = [
+
+            (
+                [
+                    "واي فاي",
+                    "wifi",
+                    "الواي فاي",
+                    "شبكه الواي فاي",
+                    "open wifi"
+                ],
+                "wifi"
+            ),
+
+            (
+                [
+                    "بلوتوث",
+                    "bluetooth",
+                    "open bluetooth"
+                ],
+                "bluetooth"
+            ),
+
+            (
+                [
+                    "شبكه الهاتف",
+                    "mobile network"
+                ],
+                "mobile"
+            ),
+
+            (
+                [
+                    "بيانات الهاتف",
+                    "data usage",
+                    "استخدام البيانات"
+                ],
+                "data"
+            ),
+
+            (
+                [
+                    "نقطه الاتصال",
+                    "مشاركه الانترنت",
+                    "hotspot",
+                    "tether"
+                ],
+                "hotspot"
+            ),
+
+            (
+                ["vpn"],
+                "vpn"
+            ),
+
+            (
+                ["nfc"],
+                "nfc"
+            ),
+
+            (
+                [
+                    "الاشعارات",
+                    "notifications"
+                ],
+                "notifications"
+            ),
+
+            (
+                [
+                    "عدم الازعاج",
+                    "do not disturb"
+                ],
+                "do_not_disturb"
+            ),
+
+            (
+                [
+                    "البطاريه",
+                    "battery"
+                ],
+                "battery"
+            ),
+
+            (
+                [
+                    "توفير الطاقه",
+                    "battery saver"
+                ],
+                "battery_saver"
+            ),
+
+            (
+                [
+                    "تحسين البطاريه",
+                    "battery optimization"
+                ],
+                "battery_optimization"
+            ),
+
+            (
+                [
+                    "شاشه القفل",
+                    "lock screen"
+                ],
+                "lock_screen"
+            ),
+
+            (
+                [
+                    "الخصوصيه",
+                    "privacy"
+                ],
+                "privacy"
+            ),
+
+            (
+                [
+                    "الموقع",
+                    "location"
+                ],
+                "location"
+            ),
+
+            (
+                [
+                    "الحمايه",
+                    "الامن",
+                    "security"
+                ],
+                "security"
+            ),
+
+            (
+                [
+                    "الطوارئ",
+                    "emergency"
+                ],
+                "emergency"
+            ),
+
+            (
+                [
+                    "الحسابات",
+                    "accounts"
+                ],
+                "accounts"
+            ),
+
+            (
+                [
+                    "النسخ الاحتياطي",
+                    "backup"
+                ],
+                "backup"
+            ),
+
+            (
+                ["google"],
+                "google"
+            ),
+
+            (
+                [
+                    "تحديث البرنامج",
+                    "تحديث النظام",
+                    "software update",
+                    "system update"
+                ],
+                "system_update"
+            ),
+
+            (
+                [
+                    "حول الهاتف",
+                    "معلومات الهاتف",
+                    "about phone"
+                ],
+                "about_device"
+            ),
+
+            (
+                [
+                    "خيارات المطور",
+                    "developer options"
+                ],
+                "developer"
+            ),
+
+            (
+                [
+                    "التحكم الابوي",
+                    "parental controls"
+                ],
+                "parental"
+            ),
+
+            (
+                [
+                    "امكانيه الوصول",
+                    "accessibility"
+                ],
+                "accessibility"
+            ),
+
+            (
+                [
+                    "التطبيقات",
+                    "apps"
+                ],
+                "apps"
+            ),
+
+            (
+                [
+                    "اعدادات الهاتف",
+                    "افتح الاعدادات",
+                    "open settings"
+                ],
+                "settings"
+            ),
+        ]
+
+        for words, action in commands:
+
+            if contains_any(
+                t,
+                words
+            ):
+
+                self.setting_action(
+                    action
+                )
+
+                return
+
+        self.set_status(
+            "تعرفت على الكلام، لكن لا يوجد أمر مطابق"
+        )
+
+    # ========================================================
+    # تنفيذ إعدادات Android
+    # ========================================================
+
+    def setting_action(self, action):
+
+        if action == "lang_ar":
+
+            self.set_language("ar")
+
+            return
+
+        if action == "lang_en":
+
+            self.set_language("en-US")
+
+            return
+
+        if action == "about_app":
+
+            self.goto("about")
+
+            return
+
+        if action == "commands":
+
+            self.goto("commands")
+
+            return
+
+        if action == "theme_light":
+
+            self.dark = False
+
+            Window.clearcolor = (
+                0.96,
+                0.97,
+                0.98,
+                1
+            )
+
+            self.set_status(
+                "تم اختيار الوضع الفاتح"
+            )
+
+            return
+
+        if action == "theme_dark":
+
+            self.dark = True
+
+            Window.clearcolor = (
+                0.035,
+                0.045,
+                0.06,
+                1
+            )
+
+            self.set_status(
+                "تم اختيار الوضع الداكن"
+            )
+
+            return
+
+        if action == "theme_system":
+
+            self.set_status(
+                "الوضع التلقائي يعتمد على إعداد النظام"
+            )
+
+            return
+
+        if action == "brightness":
+
+            self.open_write_settings()
+
+            return
+
+        if action == "app_details":
+
+            self.open_app_details()
+
+            return
+
+        if action == "app_notifications":
+
+            self.open_app_notifications()
+
+            return
+
+        actions = {
+
+            "settings":
+                "android.settings.SETTINGS",
+
+            "wifi":
+                "android.settings.WIFI_SETTINGS",
+
+            "bluetooth":
+                "android.settings.BLUETOOTH_SETTINGS",
+
+            "mobile":
+                "android.settings.NETWORK_OPERATOR_SETTINGS",
+
+            "data":
+                "android.settings.DATA_USAGE_SETTINGS",
+
+            "hotspot":
+                "android.settings.TETHER_SETTINGS",
+
+            "vpn":
+                "android.settings.VPN_SETTINGS",
+
+            "nfc":
+                "android.settings.NFC_SETTINGS",
+
+            "notifications":
+                "android.settings.NOTIFICATION_SETTINGS",
+
+            "do_not_disturb":
+                "android.settings.SOUND_SETTINGS",
+
+            "notification_access":
+                "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS",
+
+            "battery":
+                "android.settings.BATTERY_SETTINGS",
+
+            "battery_usage":
+                "android.settings.BATTERY_SETTINGS",
+
+            "battery_saver":
+                "android.settings.BATTERY_SAVER_SETTINGS",
+
+            "battery_optimization":
+                "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS",
+
+            "apps":
+                "android.settings.APPLICATION_SETTINGS",
+
+            "display":
+                "android.settings.DISPLAY_SETTINGS",
+
+            "privacy":
+                "android.settings.PRIVACY_SETTINGS",
+
+            "location":
+                "android.settings.LOCATION_SOURCE_SETTINGS",
+
+            "security":
+                "android.settings.SECURITY_SETTINGS",
+
+            "lock_screen":
+                "android.settings.SECURITY_SETTINGS",
+
+            "emergency":
+                "android.settings.SAFETY_CENTER_SETTINGS",
+
+            "accounts":
+                "android.settings.SYNC_SETTINGS",
+
+            "google":
+                "android.settings.GOOGLE_SETTINGS",
+
+            "backup":
+                "android.settings.BACKUP_SETTINGS",
+
+            "storage":
+                "android.settings.INTERNAL_STORAGE_SETTINGS",
+
+            "digital_wellbeing":
+                "android.settings.DIGITAL_WELLBEING_SETTINGS",
+
+            "developer":
+                "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+
+            "accessibility":
+                "android.settings.ACCESSIBILITY_SETTINGS",
+
+            "language":
+                "android.settings.LOCALE_SETTINGS",
+
+            "date":
+                "android.settings.DATE_SETTINGS",
+
+            "system_update":
+                "android.settings.SYSTEM_UPDATE_SETTINGS",
+
+            "about_device":
+                "android.settings.DEVICE_INFO_SETTINGS",
+
+            "default_apps":
+                "android.settings.MANAGE_DEFAULT_APPS_SETTINGS",
+
+            "special_access":
+                "android.settings.MANAGE_UNKNOWN_APP_SOURCES",
+
+            "overlay":
+                "android.settings.action.MANAGE_OVERLAY_PERMISSION",
+
+            "parental":
+                "android.settings.FAMILY_CENTER",
+
+            "reset":
+                "android.settings.MASTER_CLEAR",
+
+            "app_permissions":
+                "android.settings.APPLICATION_DETAILS_SETTINGS",
+        }
+
+        self.open_android_setting(
+            actions.get(
+                action,
+                "android.settings.SETTINGS"
+            )
+        )
+
+    # ========================================================
+    # فتح صفحة من إعدادات Android
+    # ========================================================
+
+    def open_android_setting(
+        self,
+        action
+    ):
+
+        if not ANDROID or not JNIUS:
+
+            self.set_status(
+                "هذه الصفحة متاحة داخل APK على Android"
+            )
+
+            return
+
+        try:
+
+            Intent = autoclass(
+                "android.content.Intent"
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            try:
+
+                PythonActivity.mActivity.startActivity(
+                    Intent(action)
+                )
+
+            except Exception:
+
+                PythonActivity.mActivity.startActivity(
+                    Intent(
+                        "android.settings.SETTINGS"
+                    )
+                )
+
+        except Exception as exc:
+
+            print(
+                "settings:",
+                action,
+                exc
+            )
+
+            self.set_status(
+                "تعذر فتح صفحة الإعدادات"
+            )
+
+    # ========================================================
+    # معلومات التطبيق
+    # ========================================================
+
+    def open_app_details(self):
+
+        if not ANDROID or not JNIUS:
+            return
+
+        try:
+
+            Intent = autoclass(
+                "android.content.Intent"
+            )
+
+            Uri = autoclass(
+                "android.net.Uri"
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            intent = Intent(
+                "android.settings.APPLICATION_DETAILS_SETTINGS"
+            )
+
+            intent.setData(
+                Uri.parse(
+                    "package:"
+                    + str(
+                        PythonActivity
+                        .mActivity
+                        .getPackageName()
+                    )
+                )
+            )
+
+            PythonActivity.mActivity.startActivity(
+                intent
+            )
+
+        except Exception as exc:
+
+            print(exc)
+
+    # ========================================================
+    # إشعارات التطبيق
+    # ========================================================
+
+    def open_app_notifications(self):
+
+        if not ANDROID or not JNIUS:
+            return
+
+        try:
+
+            Intent = autoclass(
+                "android.content.Intent"
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            intent = Intent(
+                "android.settings.APP_NOTIFICATION_SETTINGS"
+            )
+
+            intent.putExtra(
+                "android.provider.extra.APP_PACKAGE",
+                str(
+                    PythonActivity
+                    .mActivity
+                    .getPackageName()
+                )
+            )
+
+            PythonActivity.mActivity.startActivity(
+                intent
+            )
 
         except Exception:
 
-            self.notify(
-                "لم أستطع قراءة نتيجة الصوت"
-                if self.is_arabic
-                else "Could not read speech result"
+            self.open_android_setting(
+                "android.settings.NOTIFICATION_SETTINGS"
             )
 
     # ========================================================
-    # تحليل الأوامر
+    # صلاحية تعديل إعدادات النظام
     # ========================================================
 
-    def execute_command(self, command):
+    def open_write_settings(self):
 
-        if not command:
-            return
+        if not ANDROID or not JNIUS:
 
-        original = str(command).strip()
-
-        text = normalize_arabic(
-            arabic_digits_to_ascii(original)
-        )
-
-        # ----------------------------------------------------
-        # من نحن
-        # ----------------------------------------------------
-
-        if (
-            "من نحن" in text
-            or "عن التطبيق" in text
-            or "about" in text
-        ):
-
-            self.sm.current = "about"
-            return
-
-        # ----------------------------------------------------
-        # الأوامر
-        # ----------------------------------------------------
-
-        if (
-            "الاوامر" in text
-            or "اوامر صوتيه" in text
-            or "commands" in text
-        ):
-
-            self.sm.current = "commands"
-            return
-
-        # ----------------------------------------------------
-        # الرئيسية
-        # ----------------------------------------------------
-
-        if (
-            text in ["الرئيسيه", "الرئيسية", "home"]
-        ):
-
-            self.sm.current = "home"
-            return
-
-        # ----------------------------------------------------
-        # الإعدادات
-        # ----------------------------------------------------
-
-        if (
-            "افتح الاعدادات" in text
-            or text == "الاعدادات"
-            or "settings" in text
-        ):
-
-            self.sm.current = "settings"
-
-            self.notify(
-                "تم فتح الإعدادات"
-                if self.is_arabic
-                else "Settings opened"
+            self.set_status(
+                "هذه الميزة تعمل داخل Android"
             )
 
             return
 
-        # ----------------------------------------------------
-        # رفع الصوت
-        # ----------------------------------------------------
+        try:
 
-        if (
-            "ارفع الصوت" in text
-            or "علي الصوت" in text
-            or "رفع الصوت" in text
-            or "volume up" in text
-        ):
-
-            self.execute_quick("volume_up")
-            return
-
-        # ----------------------------------------------------
-        # خفض الصوت
-        # ----------------------------------------------------
-
-        if (
-            "اخفض الصوت" in text
-            or "نزل الصوت" in text
-            or "خفض الصوت" in text
-            or "volume down" in text
-        ):
-
-            self.execute_quick("volume_down")
-            return
-
-        # ----------------------------------------------------
-        # كتم الصوت
-        # ----------------------------------------------------
-
-        if (
-            "اكتم الصوت" in text
-            or "كتم الصوت" in text
-            or "mute" in text
-        ):
-
-            self.execute_quick("mute")
-            return
-
-        # ----------------------------------------------------
-        # السطوع بنسبة
-        # ----------------------------------------------------
-
-        brightness_match = re.search(
-            r"(\d{1,3})\s*(?:%|بالمئه|بالمئة|percent)",
-            text
-        )
-
-        if (
-            brightness_match
-            and (
-                "سطوع" in text
-                or "سطوع" in original
-                or "brightness" in text
-            )
-        ):
-
-            value = int(
-                brightness_match.group(1)
+            Settings = autoclass(
+                "android.provider.Settings"
             )
 
-            value = max(0, min(100, value))
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
 
-            if AndroidController.set_brightness(value):
-
-                self.notify(
-                    f"تم ضبط السطوع على {value}%"
-                    if self.is_arabic
-                    else f"Brightness set to {value}%"
-                )
-
-            else:
-
-                self.open_setting(
-                    "android.settings.DISPLAY_SETTINGS"
-                )
-
-            return
-
-        # ----------------------------------------------------
-        # زيادة السطوع
-        # ----------------------------------------------------
-
-        if (
-            "ارفع السطوع" in text
-            or "زد السطوع" in text
-            or "brightness up" in text
-        ):
-
-            self.execute_quick("brightness_up")
-            return
-
-        # ----------------------------------------------------
-        # خفض السطوع
-        # ----------------------------------------------------
-
-        if (
-            "اخفض السطوع" in text
-            or "خفض السطوع" in text
-            or "brightness down" in text
-        ):
-
-            self.execute_quick("brightness_down")
-            return
-
-        # ----------------------------------------------------
-        # التدوير
-        # ----------------------------------------------------
-
-        if (
-            "شغل التدوير" in text
-            or "فعل التدوير" in text
-            or "التدوير التلقائي" in text
-            or "auto rotation" in text
-        ):
-
-            if (
-                "وقف" in text
-                or "اطف" in text
-                or "تعطيل" in text
-                or "off" in text
+            if not Settings.System.canWrite(
+                PythonActivity.mActivity
             ):
 
-                if AndroidController.set_auto_rotate(False):
+                Intent = autoclass(
+                    "android.content.Intent"
+                )
 
-                    self.notify(
-                        "تم إيقاف التدوير التلقائي"
-                        if self.is_arabic
-                        else "Auto rotation disabled"
+                Uri = autoclass(
+                    "android.net.Uri"
+                )
+
+                intent = Intent(
+                    "android.settings.action.MANAGE_WRITE_SETTINGS"
+                )
+
+                intent.setData(
+                    Uri.parse(
+                        "package:"
+                        + str(
+                            PythonActivity
+                            .mActivity
+                            .getPackageName()
+                        )
                     )
+                )
 
-                else:
-
-                    self.open_setting(
-                        "android.settings.DISPLAY_SETTINGS"
-                    )
+                PythonActivity.mActivity.startActivity(
+                    intent
+                )
 
             else:
 
-                if AndroidController.set_auto_rotate(True):
+                self.set_status(
+                    "صلاحية تعديل إعدادات النظام متاحة"
+                )
 
-                    self.notify(
-                        "تم تشغيل التدوير التلقائي"
-                        if self.is_arabic
-                        else "Auto rotation enabled"
-                    )
+        except Exception as exc:
 
-                else:
-
-                    self.open_setting(
-                        "android.settings.DISPLAY_SETTINGS"
-                    )
-
-            return
-
-        # ----------------------------------------------------
-        # Wi-Fi
-        # ----------------------------------------------------
-
-        if (
-            "واي فاي" in text
-            or "wifi" in text
-            or "wi fi" in text
-        ):
-
-            self.execute_quick("wifi")
-            return
-
-        # ----------------------------------------------------
-        # Bluetooth
-        # ----------------------------------------------------
-
-        if (
-            "بلوتوث" in text
-            or "bluetooth" in text
-        ):
-
-            self.execute_quick("bluetooth")
-            return
-
-        # ----------------------------------------------------
-        # الطيران
-        # ----------------------------------------------------
-
-        if (
-            "وضع الطيران" in text
-            or "الطيران" in text
-            or "airplane" in text
-        ):
-
-            self.execute_quick("airplane")
-            return
-
-        # ----------------------------------------------------
-        # hotspot
-        # ----------------------------------------------------
-
-        if (
-            "نقطه الاتصال" in text
-            or "نقطة الاتصال" in text
-            or "الهوتسبوت" in text
-            or "hotspot" in text
-        ):
-
-            self.execute_quick("hotspot")
-            return
-
-        # ----------------------------------------------------
-        # بيانات الهاتف
-        # ----------------------------------------------------
-
-        if (
-            "بيانات الهاتف" in text
-            or "بيانات الجوال" in text
-            or "mobile data" in text
-        ):
-
-            self.execute_quick("mobile_data")
-            return
-
-        # ----------------------------------------------------
-        # الموقع
-        # ----------------------------------------------------
-
-        if (
-            text == "الموقع"
-            or "افتح الموقع" in text
-            or "location" in text
-        ):
-
-            self.execute_quick("location")
-            return
-
-        # ----------------------------------------------------
-        # NFC
-        # ----------------------------------------------------
-
-        if "nfc" in text:
-
-            self.execute_quick("nfc")
-            return
-
-        # ----------------------------------------------------
-        # VPN
-        # ----------------------------------------------------
-
-        if (
-            "vpn" in text
-            or "الشبكه الافتراضيه" in text
-        ):
-
-            self.execute_quick("vpn")
-            return
-
-        # ----------------------------------------------------
-        # توفير الطاقة
-        # ----------------------------------------------------
-
-        if (
-            "توفير الطاقه" in text
-            or "توفير الطاقة" in original
-            or "battery saver" in text
-        ):
-
-            self.execute_quick("battery_saver")
-            return
-
-        # ----------------------------------------------------
-        # عدم الإزعاج
-        # ----------------------------------------------------
-
-        if (
-            "عدم الازعاج" in text
-            or "لا تزعج" in text
-            or "do not disturb" in text
-            or "dnd" in text
-        ):
-
-            self.execute_quick("dnd")
-            return
-
-        # ----------------------------------------------------
-        # الوضع الداكن
-        # ----------------------------------------------------
-
-        if (
-            "الوضع الداكن" in text
-            or "الوضع المظلم" in text
-            or "dark mode" in text
-        ):
-
-            self.set_theme(True)
-            return
-
-        # ----------------------------------------------------
-        # الوضع الفاتح
-        # ----------------------------------------------------
-
-        if (
-            "الوضع الفاتح" in text
-            or "light mode" in text
-        ):
-
-            self.set_theme(False)
-            return
-
-        # ----------------------------------------------------
-        # الخصوصية
-        # ----------------------------------------------------
-
-        if (
-            "الخصوصيه" in text
-            or "الخصوصية" in original
-            or "privacy" in text
-        ):
-
-            self.open_setting(
-                "android.settings.PRIVACY_SETTINGS"
+            print(
+                "write settings:",
+                exc
             )
+
+    # ========================================================
+    # رفع وخفض الصوت
+    # ========================================================
+
+    def audio_adjust(
+        self,
+        direction
+    ):
+
+        if not ANDROID or not JNIUS:
             return
 
-        # ----------------------------------------------------
-        # الأمان
-        # ----------------------------------------------------
+        try:
 
-        if (
-            "الامان" in text
-            or "الأمان" in original
-            or "security" in text
-        ):
-
-            self.open_setting(
-                "android.settings.SECURITY_SETTINGS"
+            Context = autoclass(
+                "android.content.Context"
             )
-            return
 
-        # ----------------------------------------------------
-        # التطبيقات
-        # ----------------------------------------------------
-
-        if (
-            "التطبيقات" in text
-            or "apps" in text
-        ):
-
-            self.open_setting(
-                "android.settings.APPLICATION_SETTINGS"
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
             )
-            return
 
-        # ----------------------------------------------------
-        # الشاشة
-        # ----------------------------------------------------
-
-        if (
-            "الشاشه" in text
-            or "الشاشة" in original
-            or "display" in text
-        ):
-
-            self.open_setting(
-                "android.settings.DISPLAY_SETTINGS"
+            audio = (
+                PythonActivity
+                .mActivity
+                .getSystemService(
+                    Context.AUDIO_SERVICE
+                )
             )
-            return
 
-        # ----------------------------------------------------
-        # التخزين
-        # ----------------------------------------------------
-
-        if (
-            "التخزين" in text
-            or "مساحه التخزين" in text
-            or "storage" in text
-        ):
-
-            self.open_setting(
-                "android.settings.INTERNAL_STORAGE_SETTINGS"
+            audio.adjustStreamVolume(
+                3,
+                1 if direction > 0 else -1,
+                0
             )
-            return
 
-        # ----------------------------------------------------
-        # إمكانية الوصول
-        # ----------------------------------------------------
-
-        if (
-            "امكانيه الوصول" in text
-            or "إمكانية الوصول" in original
-            or "accessibility" in text
-        ):
-
-            self.open_setting(
-                "android.settings.ACCESSIBILITY_SETTINGS"
+            self.set_status(
+                "تم رفع الصوت"
+                if direction > 0
+                else
+                "تم خفض الصوت"
             )
-            return
 
-        # ----------------------------------------------------
-        # خيارات المطور
-        # ----------------------------------------------------
+        except Exception as exc:
 
-        if (
-            "خيارات المطور" in text
-            or "developer options" in text
-        ):
-
-            self.open_setting(
-                "android.settings.APPLICATION_DEVELOPMENT_SETTINGS"
+            print(
+                "audio:",
+                exc
             )
+
+    # ========================================================
+    # كتم الصوت
+    # ========================================================
+
+    def audio_mute(self):
+
+        if not ANDROID or not JNIUS:
             return
 
-        # ----------------------------------------------------
-        # تحديث النظام
-        # ----------------------------------------------------
+        try:
 
-        if (
-            "تحديث البرنامج" in text
-            or "تحديث النظام" in text
-            or "system update" in text
-        ):
-
-            self.open_setting(
-                "android.settings.SYSTEM_UPDATE_SETTINGS"
+            Context = autoclass(
+                "android.content.Context"
             )
-            return
 
-        # ----------------------------------------------------
-        # الحسابات
-        # ----------------------------------------------------
-
-        if (
-            "الحسابات" in text
-            or "accounts" in text
-        ):
-
-            self.open_setting(
-                "android.settings.SYNC_SETTINGS"
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
             )
-            return
 
-        # ----------------------------------------------------
-        # النسخ الاحتياطي
-        # ----------------------------------------------------
-
-        if (
-            "النسخ الاحتياطي" in text
-            or "backup" in text
-        ):
-
-            self.open_setting(
-                "android.settings.BACKUP_SETTINGS"
+            audio = (
+                PythonActivity
+                .mActivity
+                .getSystemService(
+                    Context.AUDIO_SERVICE
+                )
             )
-            return
 
-        # ----------------------------------------------------
-        # اللغة
-        # ----------------------------------------------------
-
-        if (
-            "اللغه" in text
-            or "اللغة" in original
-            or "language" in text
-        ):
-
-            self.open_setting(
-                "android.settings.LOCALE_SETTINGS"
+            audio.adjustStreamVolume(
+                3,
+                101,
+                0
             )
-            return
 
-        # ----------------------------------------------------
-        # التاريخ والوقت
-        # ----------------------------------------------------
-
-        if (
-            "التاريخ والوقت" in text
-            or "date and time" in text
-        ):
-
-            self.open_setting(
-                "android.settings.DATE_SETTINGS"
+            self.set_status(
+                "تم كتم الصوت"
             )
-            return
 
-        # ----------------------------------------------------
-        # الصوت العام
-        # ----------------------------------------------------
+        except Exception as exc:
 
-        if (
-            "الصوت" in text
-            or "sound" in text
-        ):
-
-            self.open_setting(
-                "android.settings.SOUND_SETTINGS"
+            print(
+                "mute:",
+                exc
             )
-            return
 
-        # ----------------------------------------------------
-        # لا يوجد أمر
-        # ----------------------------------------------------
+    # ========================================================
+    # ضبط السطوع
+    # ========================================================
 
-        self.notify(
-            "لم أفهم الأمر: " + original
-            if self.is_arabic
-            else "I did not understand: " + original
+    def set_brightness(
+        self,
+        percent
+    ):
+
+        percent = max(
+            0,
+            min(
+                100,
+                int(percent)
+            )
         )
+
+        if not ANDROID or not JNIUS:
+            return
+
+        try:
+
+            Settings = autoclass(
+                "android.provider.Settings"
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            if not Settings.System.canWrite(
+                PythonActivity.mActivity
+            ):
+
+                self.open_write_settings()
+
+                self.set_status(
+                    "اسمح للتطبيق بتعديل إعدادات النظام ثم أعد الأمر"
+                )
+
+                return
+
+            value = int(
+                percent * 255 / 100
+            )
+
+            Settings.System.putInt(
+                PythonActivity
+                .mActivity
+                .getContentResolver(),
+                Settings.System.SCREEN_BRIGHTNESS,
+                value
+            )
+
+            self.set_status(
+                f"تم ضبط السطوع على {percent}%"
+            )
+
+        except Exception as exc:
+
+            print(
+                "brightness:",
+                exc
+            )
+
+    # ========================================================
+    # تغيير السطوع
+    # ========================================================
+
+    def change_brightness(
+        self,
+        delta
+    ):
+
+        if not ANDROID or not JNIUS:
+            return
+
+        try:
+
+            Settings = autoclass(
+                "android.provider.Settings"
+            )
+
+            PythonActivity = autoclass(
+                "org.kivy.android.PythonActivity"
+            )
+
+            resolver = (
+                PythonActivity
+                .mActivity
+                .getContentResolver()
+            )
+
+            if not Settings.System.canWrite(
+                PythonActivity.mActivity
+            ):
+
+                self.open_write_settings()
+
+                return
+
+            current = Settings.System.getInt(
+                resolver,
+                Settings.System.SCREEN_BRIGHTNESS
+            )
+
+            new_value = max(
+                0,
+                min(
+                    255,
+                    current
+                    + int(
+                        255 * delta / 100
+                    )
+                )
+            )
+
+            Settings.System.putInt(
+                resolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                new_value
+            )
+
+            self.set_status(
+                "تم تغيير السطوع"
+            )
+
+        except Exception as exc:
+
+            print(
+                "brightness change:",
+                exc
+            )
 
 
 # ============================================================
-# تشغيل
+# تشغيل التطبيق
 # ============================================================
 
 if __name__ == "__main__":

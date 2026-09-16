@@ -2,210 +2,133 @@ name: Build APK
 
 on:
   push:
-    branches:
-      - main
-      - master
-
+    branches: [main, master]
   workflow_dispatch:
 
-
-# =========================================================
-# الصلاحيات
-# =========================================================
-
-permissions:
-  contents: read
-
-
-# =========================================================
-# JOB
-# =========================================================
-
 jobs:
-
   build:
-
     runs-on: ubuntu-22.04
 
     steps:
-
-      # ---------------------------------------------------
-      # تحميل المشروع
-      # ---------------------------------------------------
-
+      # =========================
+      # 1. Checkout
+      # =========================
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-
-      # ---------------------------------------------------
-      # Python 3.11
-      # ---------------------------------------------------
-
+      # =========================
+      # 2. Python
+      # =========================
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
+          cache: "pip"
 
-
-      # ---------------------------------------------------
-      # Java 17
-      # ---------------------------------------------------
-
+      # =========================
+      # 3. Java
+      # =========================
       - name: Set up Java
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
+      # =========================
+      # 4. Android SDK
+      # =========================
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      # ---------------------------------------------------
-      # متطلبات النظام
-      # ---------------------------------------------------
-
+      # =========================
+      # 5. System dependencies
+      # =========================
       - name: Install system dependencies
         run: |
-
           sudo apt-get update
-
           sudo apt-get install -y \
             build-essential \
             git \
             python3-dev \
             ccache \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libtinfo6 \
+            libncurses5 \
+            libstdc++6 \
             zlib1g-dev \
-            libffi-dev \
-            libssl-dev \
-            libltdl-dev \
-            autoconf \
-            automake \
-            autopoint \
-            libtool \
-            pkg-config \
-            cmake \
             unzip \
-            zip
+            zip \
+            libltdl-dev
 
-
-      # ---------------------------------------------------
-      # تثبيت Buildozer
-      # ---------------------------------------------------
-
-      - name: Install Buildozer
+      # =========================
+      # 6. Android packages
+      # =========================
+      - name: Install Android packages
         run: |
+          yes | sdkmanager --licenses >/dev/null || true
 
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;33.0.0" \
+            "ndk;25.1.8937393"
+
+      # =========================
+      # 7. Cache Buildozer
+      # =========================
+      - name: Cache Buildozer
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.cache/pip
+          key: ${{ runner.os }}-buildozer-api33-ndk25b-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-api33-ndk25b-
+
+      # =========================
+      # 8. Install Buildozer
+      # =========================
+      - name: Install Buildozer and Cython
+        run: |
           python -m pip install --upgrade pip
-
-          python -m pip install setuptools
-
-          python -m pip install "cython==0.29.34"
-
           python -m pip install \
-            git+https://github.com/kivy/buildozer.git
+            "cython==0.29.33" \
+            "buildozer"
 
-
-      # ---------------------------------------------------
-      # تنظيف أي ملفات بناء قديمة
-      # ---------------------------------------------------
-
-
-
-      # ---------------------------------------------------
-      # فحص الملفات والإعدادات
-      # ---------------------------------------------------
-
-      - name: Verify project
+      # =========================
+      # 9. Prepare ccache
+      # =========================
+      - name: Configure ccache
         run: |
+          ccache --max-size=2G
+          ccache --zero-stats
 
-          echo "======================================"
-
-          echo "PROJECT FILES"
-
-          echo "======================================"
-
-          ls -la
-
-
-          echo "======================================"
-
-          echo "WORKFLOW"
-
-          echo "======================================"
-
-          ls -la .github/workflows
-
-
-          echo "======================================"
-
-          echo "PYTHON"
-
-          echo "======================================"
-
-          python --version
-
-
-          echo "======================================"
-
-          echo "JAVA"
-
-          echo "======================================"
-
-          java -version
-
-
-          echo "======================================"
-
-          echo "BUILDOZER"
-
-          echo "======================================"
-
-          buildozer --version
-
-
-          echo "======================================"
-
-          echo "FONT"
-
-          echo "======================================"
-
-          test -f NotoKufiArabic-VariableFont_wght.ttf
-
-          echo "Font OK"
-
-
-          echo "======================================"
-
-          echo "P4A CONFIG"
-
-          echo "======================================"
-
-          grep -n \
-            "p4a.branch\|requirements\|android.ndk" \
-            buildozer.spec
-
-
-      # ---------------------------------------------------
-      # بناء APK
-      # ---------------------------------------------------
-
+      # =========================
+      # 10. Build APK
+      # =========================
       - name: Build APK
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         run: |
+          buildozer -v android debug
 
-          yes | buildozer -v android debug
+      # =========================
+      # 11. ccache statistics
+      # =========================
+      - name: Show ccache statistics
+        if: always()
+        run: |
+          ccache --show-stats || true
 
-
-      # ---------------------------------------------------
-      # رفع APK
-      # ---------------------------------------------------
-
+      # =========================
+      # 12. Upload APK
+      # =========================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-
           name: VoiceControl-APK
-
           path: bin/*.apk
-
           if-no-files-found: error

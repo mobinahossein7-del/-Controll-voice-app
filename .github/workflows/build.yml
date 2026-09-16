@@ -2,7 +2,9 @@ name: Build APK
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
@@ -10,24 +12,24 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # =========================
-      # 1. Checkout
-      # =========================
+
+      # ==============================
+      # Checkout repository
+      # ==============================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # =========================
-      # 2. Python
-      # =========================
+      # ==============================
+      # Python 3.10
+      # ==============================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: "pip"
 
-      # =========================
-      # 3. Java
-      # =========================
+      # ==============================
+      # Java 17
+      # ==============================
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -35,15 +37,15 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      # =========================
-      # 4. Android SDK
-      # =========================
+      # ==============================
+      # Android SDK
+      # ==============================
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # =========================
-      # 5. System dependencies
-      # =========================
+      # ==============================
+      # System dependencies
+      # ==============================
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -59,9 +61,9 @@ jobs:
             zip \
             libltdl-dev
 
-      # =========================
-      # 6. Android packages
-      # =========================
+      # ==============================
+      # Android SDK / NDK
+      # ==============================
       - name: Install Android packages
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -72,9 +74,9 @@ jobs:
             "build-tools;33.0.0" \
             "ndk;25.1.8937393"
 
-      # =========================
-      # 7. Cache Buildozer
-      # =========================
+      # ==============================
+      # Restore Buildozer cache
+      # ==============================
       - name: Cache Buildozer
         uses: actions/cache@v4
         with:
@@ -83,13 +85,14 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.cache/pip
+            ~/.cache/ccache
           key: ${{ runner.os }}-buildozer-api33-ndk25b-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
             ${{ runner.os }}-buildozer-api33-ndk25b-
 
-      # =========================
-      # 8. Install Buildozer
-      # =========================
+      # ==============================
+      # Install Buildozer
+      # ==============================
       - name: Install Buildozer and Cython
         run: |
           python -m pip install --upgrade pip
@@ -97,17 +100,17 @@ jobs:
             "cython==0.29.33" \
             "buildozer"
 
-      # =========================
-      # 9. Prepare ccache
-      # =========================
+      # ==============================
+      # Configure ccache
+      # ==============================
       - name: Configure ccache
         run: |
           ccache --max-size=2G
           ccache --zero-stats
 
-      # =========================
-      # 10. Build APK
-      # =========================
+      # ==============================
+      # Build APK
+      # ==============================
       - name: Build APK
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
@@ -115,17 +118,17 @@ jobs:
         run: |
           buildozer -v android debug
 
-      # =========================
-      # 11. ccache statistics
-      # =========================
+      # ==============================
+      # Show ccache statistics
+      # ==============================
       - name: Show ccache statistics
         if: always()
         run: |
           ccache --show-stats || true
 
-      # =========================
-      # 12. Upload APK
-      # =========================
+      # ==============================
+      # Upload APK
+      # ==============================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

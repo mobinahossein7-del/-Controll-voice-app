@@ -3,24 +3,26 @@
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.core.text import LabelBase
 from kivy.core.audio import SoundLoader
 from kivy.metrics import dp
+from kivy.properties import ColorProperty, StringProperty
 from kivy.graphics import Color, RoundedRectangle, Ellipse, Line
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.screenmanager import ScreenManager, Screen
+import re
 
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
-    ARABIC_OK = True
 except Exception:
     arabic_reshaper = None
     get_display = None
-    ARABIC_OK = False
 
 try:
     from android.permissions import Permission, check_permission, request_permissions
@@ -37,414 +39,173 @@ except Exception:
 
 
 FONT = "NotoKufiArabic-VariableFont_wght.ttf"
+ARABIC_FONT = FONT
 BACKGROUND_FILE = "tanjiro_background.jpg"
 MUSIC_FILE = "app_music.mp3"
-
 REQUEST_SPEECH = 7001
 
 
 # =========================================================
-# COLORS
+# REGISTER FONT
 # =========================================================
 
-BG = (0.025, 0.018, 0.025, 1)
-PANEL = (0.035, 0.028, 0.045, 0.94)
-PANEL_2 = (0.055, 0.025, 0.035, 0.94)
-
-RED = (0.90, 0.055, 0.045, 1)
-RED_DARK = (0.38, 0.015, 0.020, 1)
-
-WHITE = (1, 1, 1, 1)
-MUTED = (0.76, 0.76, 0.80, 1)
+try:
+    LabelBase.register(
+        name="NotoKufiArabic",
+        fn_regular=FONT
+    )
+    ARABIC_FONT = "NotoKufiArabic"
+except Exception as exc:
+    print("font registration:", exc)
 
 
 # =========================================================
-# ARABIC RTL
+# ARABIC
 # =========================================================
+
+def has_arabic(text):
+    return any(
+        ("\u0600" <= c <= "\u06ff")
+        or ("\u0750" <= c <= "\u077f")
+        or ("\u08a0" <= c <= "\u08ff")
+        for c in str(text)
+    )
+
 
 def rtl(text):
     """
-    معالجة النص العربي:
-    1. تشكيل الحروف.
-    2. ترتيب RTL.
+    معالجة العربية لـ Kivy:
+    تشكيل الحروف ثم ترتيب RTL.
     """
 
     text = str(text)
 
-    if not text:
+    if not has_arabic(text):
         return text
 
-    if not ARABIC_OK:
-        return text
-
-    if not any("\u0600" <= c <= "\u06ff" for c in text):
+    if not arabic_reshaper or not get_display:
         return text
 
     try:
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
-    except Exception:
+        shaped = arabic_reshaper.reshape(text)
+
+        return get_display(
+            shaped,
+            base_dir="R"
+        )
+
+    except Exception as exc:
+
+        print(
+            "arabic rendering:",
+            exc
+        )
+
         return text
 
 
-def contains_any(text, words):
-    return any(word in text for word in words)
+def apply_text(widget, text, align="right"):
 
+    widget.text = rtl(text)
+    widget.halign = align
+    widget.valign = "middle"
 
-# =========================================================
-# ROUNDED PANEL
-# =========================================================
-
-class RoundedPanel(BoxLayout):
-
-    def __init__(self, bg=PANEL, radius=dp(16), **kwargs):
-
-        super().__init__(**kwargs)
-
-        self.panel_bg = bg
-        self.radius_value = radius
-
-        with self.canvas.before:
-
-            self._panel_color = Color(*bg)
-
-            self._panel_rect = RoundedRectangle(
-                pos=self.pos,
-                size=self.size,
-                radius=[radius]
-            )
-
-        self.bind(
-            pos=self._redraw,
-            size=self._redraw
+    if getattr(widget, "width", 0) > 0:
+        widget.text_size = (
+            widget.width,
+            None
         )
 
-    def _redraw(self, *_):
+    return widget
 
-        self._panel_rect.pos = self.pos
-        self._panel_rect.size = self.size
+
+def contains_any(text, words):
+    return any(
+        word in text
+        for word in words
+    )
 
 
 # =========================================================
-# SETTING CARD
+# CARD
 # =========================================================
 
-class SettingCard(ButtonBehavior, BoxLayout):
+class Card(ButtonBehavior, BoxLayout):
 
-    def __init__(
-        self,
-        title,
-        subtitle="",
-        icon="",
-        action=None,
-        accent=RED,
-        **kwargs
-    ):
+    text = StringProperty("")
+    icon = StringProperty("")
+    subtitle = StringProperty("")
+
+    bg = ColorProperty(
+        (0.10, 0.12, 0.16, 1)
+    )
+
+    radius = dp(18)
+
+    def __init__(self, **kwargs):
 
         super().__init__(
-            orientation="horizontal",
-            spacing=dp(10),
-            padding=(dp(10), dp(7)),
+            orientation="vertical",
+            padding=(
+                dp(14),
+                dp(10)
+            ),
+            spacing=dp(3),
             **kwargs
         )
 
         self.size_hint_y = None
-        self.height = dp(66)
 
-        self.action_key = action
-
-        self.title_raw = title
-        self.subtitle_raw = subtitle
-
-        self.search_text = (
-            title + " " + subtitle
-        ).lower()
-
-        self.accent = accent
-        self._pressed = False
-
-        with self.canvas.before:
-
-            self._bg_color = Color(
-                0.025,
-                0.022,
-                0.032,
-                0.94
-            )
-
-            self._bg_rect = RoundedRectangle(
-                pos=self.pos,
-                size=self.size,
-                radius=[dp(13)]
-            )
-
-            self._line_color = Color(*accent)
-
-            self._line = Line(
-                rounded_rectangle=(
-                    0,
-                    0,
-                    0,
-                    0,
-                    dp(13)
-                ),
-                width=0.8
-            )
+        if "height" not in kwargs:
+            self.height = dp(88)
 
         self.bind(
             pos=self._draw,
             size=self._draw
         )
 
-        # -------------------------------------------------
-        # ICON
-        # -------------------------------------------------
-
-        icon_box = BoxLayout(
-            size_hint_x=None,
-            width=dp(45),
-            padding=dp(2)
-        )
-
-        with icon_box.canvas.before:
-
-            icon_box._c = Color(*accent)
-
-            icon_box._e = Ellipse(
-                size=(dp(38), dp(38)),
-                pos=(0, 0)
-            )
-
-        icon_box.bind(
-            pos=lambda *_: self._place_icon(icon_box)
-        )
-
-        self.icon_label = Label(
-            text=icon,
-            font_name=FONT,
-            font_size=dp(15),
-            color=WHITE,
-            bold=True,
-            halign="center",
-            valign="middle"
-        )
-
-        icon_box.add_widget(self.icon_label)
-
-        # -------------------------------------------------
-        # TEXT
-        # -------------------------------------------------
-
-        texts = BoxLayout(
-            orientation="vertical",
-            spacing=dp(1)
-        )
-
-        self.title_label = Label(
-            text=rtl(title),
-            font_name=FONT,
-            font_size=dp(12.5),
-            color=WHITE,
-            bold=True,
-            halign="right",
-            valign="middle"
-        )
-
-        self.subtitle_label = Label(
-            text=rtl(subtitle),
-            font_name=FONT,
-            font_size=dp(9.5),
-            color=MUTED,
-            halign="right",
-            valign="middle"
-        )
-
-        self.title_label.bind(
-            size=lambda w, _: setattr(
-                w,
-                "text_size",
-                (w.width, None)
-            )
-        )
-
-        self.subtitle_label.bind(
-            size=lambda w, _: setattr(
-                w,
-                "text_size",
-                (w.width, None)
-            )
-        )
-
-        texts.add_widget(self.title_label)
-        texts.add_widget(self.subtitle_label)
-
-        # -------------------------------------------------
-        # ARROW
-        # -------------------------------------------------
-
-        self.chevron = Label(
-            text="›",
-            font_name=FONT,
-            font_size=dp(24),
-            color=WHITE,
-            size_hint_x=None,
-            width=dp(22),
-            halign="center",
-            valign="middle"
-        )
-
-        self.add_widget(icon_box)
-        self.add_widget(texts)
-        self.add_widget(self.chevron)
-
-    def _place_icon(self, box):
-
-        box._e.pos = (
-            box.x + dp(3),
-            box.center_y - dp(19)
-        )
-
-        box._e.size = (
-            dp(38),
-            dp(38)
-        )
-
-    def _draw(self, *_):
-
-        self._bg_rect.pos = self.pos
-        self._bg_rect.size = self.size
-
-        self._line.rounded_rectangle = (
-            self.x,
-            self.y,
-            self.width,
-            self.height,
-            dp(13)
-        )
-
-    def on_press(self):
-
-        self._pressed = True
-
-        self._bg_color.rgba = (
-            0.12,
-            0.025,
-            0.035,
-            0.98
-        )
-
-    def on_release(self):
-
-        self._pressed = False
-
-        self._bg_color.rgba = (
-            0.025,
-            0.022,
-            0.032,
-            0.94
-        )
-
-
-# =========================================================
-# BOTTOM CARD
-# =========================================================
-
-class BottomCard(ButtonBehavior, BoxLayout):
-
-    def __init__(
-        self,
-        title,
-        subtitle,
-        icon,
-        action=None,
-        **kwargs
-    ):
-
-        super().__init__(
-            orientation="horizontal",
-            spacing=dp(10),
-            padding=(dp(13), dp(8)),
-            **kwargs
-        )
-
-        self.size_hint_y = None
-        self.height = dp(68)
-
-        self.action_key = action
-
         with self.canvas.before:
 
             self._color = Color(
-                0.025,
-                0.018,
-                0.025,
-                0.96
+                *self.bg
             )
 
             self._rect = RoundedRectangle(
                 pos=self.pos,
                 size=self.size,
-                radius=[dp(14)]
+                radius=[self.radius]
             )
 
-            self._border_color = Color(
-                RED[0],
-                RED[1],
-                RED[2],
-                0.8
-            )
-
-            self._border = Line(
-                rounded_rectangle=(
-                    0,
-                    0,
-                    0,
-                    0,
-                    dp(14)
-                ),
-                width=0.8
-            )
-
-        self.bind(
-            pos=self._draw,
-            size=self._draw
-        )
-
-        self.icon = Label(
-            text=icon,
-            font_name=FONT,
-            font_size=dp(18),
-            color=WHITE,
-            size_hint_x=None,
-            width=dp(34),
-            halign="center"
-        )
-
-        txt = BoxLayout(
-            orientation="vertical"
+        self.icon_label = Label(
+            text=self.icon,
+            font_size=dp(24),
+            size_hint_y=None,
+            height=dp(30),
+            halign="right",
+            font_name=ARABIC_FONT
         )
 
         self.title_label = Label(
-            text=rtl(title),
-            font_name=FONT,
-            font_size=dp(12.5),
-            color=WHITE,
+            text=rtl(self.text),
+            font_name=ARABIC_FONT,
+            font_size=dp(13),
             bold=True,
             halign="right",
             valign="middle"
         )
 
         self.subtitle_label = Label(
-            text=rtl(subtitle),
-            font_name=FONT,
-            font_size=dp(9.5),
-            color=MUTED,
+            text=rtl(self.subtitle),
+            font_name=ARABIC_FONT,
+            font_size=dp(10),
+            opacity=0.72,
             halign="right",
             valign="middle"
         )
 
         self.title_label.bind(
-            size=lambda w, _: setattr(
+            size=lambda w, _:
+            setattr(
                 w,
                 "text_size",
                 (w.width, None)
@@ -452,48 +213,50 @@ class BottomCard(ButtonBehavior, BoxLayout):
         )
 
         self.subtitle_label.bind(
-            size=lambda w, _: setattr(
+            size=lambda w, _:
+            setattr(
                 w,
                 "text_size",
                 (w.width, None)
             )
         )
 
-        txt.add_widget(self.title_label)
-        txt.add_widget(self.subtitle_label)
-
-        self.arrow = Label(
-            text="›",
-            font_name=FONT,
-            font_size=dp(24),
-            color=RED,
-            size_hint_x=None,
-            width=dp(20)
+        self.add_widget(
+            self.icon_label
         )
 
-        self.add_widget(self.icon)
-        self.add_widget(txt)
-        self.add_widget(self.arrow)
+        self.add_widget(
+            self.title_label
+        )
+
+        self.add_widget(
+            self.subtitle_label
+        )
 
     def _draw(self, *_):
 
-        self._rect.pos = self.pos
-        self._rect.size = self.size
+        if hasattr(self, "_rect"):
 
-        self._border.rounded_rectangle = (
-            self.x,
-            self.y,
-            self.width,
-            self.height,
-            dp(14)
-        )
+            self._rect.pos = self.pos
+
+            self._rect.size = self.size
+
+            self._color.rgba = self.bg
 
 
 # =========================================================
-# MICROPHONE BUTTON
+# MICROPHONE
 # =========================================================
 
 class MicButton(ButtonBehavior, BoxLayout):
+
+    bg = ColorProperty(
+        (0.12, 0.48, 0.86, 1)
+    )
+
+    active_bg = ColorProperty(
+        (0.86, 0.20, 0.25, 1)
+    )
 
     def __init__(self, **kwargs):
 
@@ -503,57 +266,34 @@ class MicButton(ButtonBehavior, BoxLayout):
         )
 
         self.size_hint_y = None
-        self.height = dp(185)
-
-        self.active = False
+        self.height = dp(150)
+        self.padding = dp(10)
 
         with self.canvas.before:
 
-            self._outer = Color(
-                0.45,
-                0.01,
-                0.01,
-                0.45
+            self._color = Color(
+                *self.bg
             )
 
-            self._outer_circle = Ellipse(
-                size=(dp(148), dp(148))
-            )
-
-            self._inner = Color(
-                0.72,
-                0.02,
-                0.02,
-                1
-            )
-
-            self._inner_circle = Ellipse(
-                size=(dp(122), dp(122))
-            )
-
-            self._ring = Color(
-                1,
-                0.18,
-                0.12,
-                1
-            )
-
-            self._line = Line(
-                circle=(0, 0, 0),
-                width=2.2
+            self._ellipse = Ellipse(
+                pos=self.pos,
+                size=(dp(132), dp(132))
             )
 
         self.label = Label(
-            text=rtl("MIC\nابدأ التحدث"),
-            font_name=FONT,
-            font_size=dp(14),
-            color=WHITE,
+            text=rtl(
+                "MIC\nابدأ التحدث"
+            ),
+            font_name=ARABIC_FONT,
+            font_size=dp(16),
             bold=True,
             halign="center",
             valign="middle"
         )
 
-        self.add_widget(self.label)
+        self.add_widget(
+            self.label
+        )
 
         self.bind(
             pos=self._draw,
@@ -562,68 +302,30 @@ class MicButton(ButtonBehavior, BoxLayout):
 
     def _draw(self, *_):
 
-        d1 = min(
-            dp(148),
-            self.width - dp(12)
+        d = min(
+            self.width - dp(8),
+            dp(140)
         )
 
-        d2 = d1 - dp(26)
-
-        cx = self.center_x
-        cy = self.y + dp(98)
-
-        self._outer_circle.size = (
-            d1,
-            d1
+        self._ellipse.size = (
+            d,
+            d
         )
 
-        self._outer_circle.pos = (
-            cx - d1 / 2,
-            cy - d1 / 2
+        self._ellipse.pos = (
+            self.center_x - d / 2,
+            self.center_y - d / 2
         )
 
-        self._inner_circle.size = (
-            d2,
-            d2
-        )
-
-        self._inner_circle.pos = (
-            cx - d2 / 2,
-            cy - d2 / 2
-        )
-
-        self._line.circle = (
-            cx,
-            cy,
-            d2 / 2 + dp(5)
-        )
-
-        self.label.pos = (
-            self.x,
-            self.y - dp(2)
-        )
-
-    def on_press(self):
-
-        self._inner.rgba = (
-            0.95,
-            0.04,
-            0.03,
-            1
-        )
-
-    def on_release(self):
-
-        self._inner.rgba = (
-            0.72,
-            0.02,
-            0.02,
-            1
+        self._color.rgba = (
+            self.active_bg
+            if self.state == "down"
+            else self.bg
         )
 
 
 # =========================================================
-# MAIN APP
+# APP
 # =========================================================
 
 class VoiceControlApp(App):
@@ -652,7 +354,7 @@ class VoiceControlApp(App):
 
         self.all_setting_cards = []
 
-        self.dark = True
+        self.dark = False
 
         self.music = None
 
@@ -662,7 +364,12 @@ class VoiceControlApp(App):
 
     def build(self):
 
-        Window.clearcolor = BG
+        Window.clearcolor = (
+            0.035,
+            0.045,
+            0.06,
+            1
+        )
 
         self.sm = ScreenManager()
 
@@ -683,14 +390,15 @@ class VoiceControlApp(App):
         )
 
         Clock.schedule_once(
-            lambda *_: self.start_background_music(),
-            0.7
+            lambda *_:
+            self.start_background_music(),
+            0.5
         )
 
         return self.sm
 
     # =====================================================
-    # LABEL HELPER
+    # LABEL
     # =====================================================
 
     def label(
@@ -699,12 +407,21 @@ class VoiceControlApp(App):
         size=15,
         bold=False,
         align="right",
-        color=WHITE
+        color=None
     ):
+
+        if color is None:
+
+            color = (
+                (0.94, 0.96, 0.99, 1)
+                if self.dark
+                else
+                (0.10, 0.12, 0.16, 1)
+            )
 
         w = Label(
             text=rtl(text),
-            font_name=FONT,
+            font_name=ARABIC_FONT,
             font_size=dp(size),
             bold=bold,
             color=color,
@@ -713,7 +430,8 @@ class VoiceControlApp(App):
         )
 
         w.bind(
-            size=lambda o, _: setattr(
+            size=lambda o, _:
+            setattr(
                 o,
                 "text_size",
                 (o.width, None)
@@ -723,104 +441,48 @@ class VoiceControlApp(App):
         return w
 
     # =====================================================
-    # MUSIC
+    # HEADER
     # =====================================================
 
-    def start_background_music(self):
-
-        try:
-
-            if self.music:
-                self.music.stop()
-
-            self.music = SoundLoader.load(
-                MUSIC_FILE
-            )
-
-            if self.music:
-
-                self.music.loop = True
-
-                self.music.volume = 0.65
-
-                self.music.play()
-
-                self.set_status(
-                    "تم تشغيل الموسيقى"
-                )
-
-            else:
-
-                print(
-                    "Music file could not be loaded:",
-                    MUSIC_FILE
-                )
-
-        except Exception as exc:
-
-            print(
-                "music:",
-                exc
-            )
-
-    # =====================================================
-    # BACKGROUND
-    # =====================================================
-
-    def add_background(
+    def header(
         self,
-        root,
-        opacity=0.48
+        title,
+        back=None
     ):
 
-        try:
+        row = BoxLayout(
+            size_hint_y=None,
+            height=dp(62),
+            spacing=dp(8)
+        )
 
-            with root.canvas.before:
+        if back:
 
-                root._bg_tint = Color(
-                    0.18,
-                    0.005,
-                    0.01,
-                    opacity
-                )
-
-                root._bg_rect = RoundedRectangle(
-                    source=BACKGROUND_FILE,
-                    pos=root.pos,
-                    size=root.size
-                )
-
-                root._dark_overlay = Color(
-                    0.01,
-                    0.005,
-                    0.01,
-                    0.32
-                )
-
-                root._overlay_rect = RoundedRectangle(
-                    pos=root.pos,
-                    size=root.size
-                )
-
-            root.bind(
-                pos=lambda *_: self._update_bg(root),
-                size=lambda *_: self._update_bg(root)
+            b = Card(
+                text=back,
+                icon="‹",
+                subtitle="",
+                height=dp(52)
             )
 
-        except Exception as exc:
-
-            print(
-                "background:",
-                exc
+            b.bind(
+                on_release=
+                lambda *_:
+                self.goto(back)
             )
 
-    def _update_bg(self, root):
+            row.add_widget(b)
 
-        root._bg_rect.pos = root.pos
-        root._bg_rect.size = root.size
+        row.add_widget(
+            self.label(
+                title,
+                22,
+                True,
+                "right"
+            )
+        )
 
-        root._overlay_rect.pos = root.pos
-        root._overlay_rect.size = root.size
+        return row
 
     # =====================================================
     # HOME
@@ -834,199 +496,204 @@ class VoiceControlApp(App):
 
         root = BoxLayout(
             orientation="vertical",
-            padding=(
-                dp(14),
-                dp(12)
-            ),
-            spacing=dp(8)
+            padding=dp(14),
+            spacing=dp(10)
         )
-
-        self.add_background(
-            root,
-            0.52
-        )
-
-        # -------------------------------------------------
-        # TOP
-        # -------------------------------------------------
-
-        top = BoxLayout(
-            size_hint_y=None,
-            height=dp(48)
-        )
-
-        gear = Label(
-            text="⚙",
-            font_name=FONT,
-            font_size=dp(22),
-            color=WHITE,
-            size_hint_x=None,
-            width=dp(42),
-            halign="center"
-        )
-
-        gear.bind(
-            on_touch_down=lambda *_:
-            self.goto("settings")
-        )
-
-        top.add_widget(gear)
-
-        top.add_widget(
-            BoxLayout()
-        )
-
-        root.add_widget(top)
-
-        # -------------------------------------------------
-        # TITLES
-        # -------------------------------------------------
 
         root.add_widget(
             self.label(
                 "التحكم الصوتي",
-                27,
+                25,
                 True,
-                "center"
-            )
-        )
-
-        root.add_widget(
-            self.label(
-                "Voice Control",
-                20,
-                True,
-                "center"
+                "right"
             )
         )
 
         root.add_widget(
             self.label(
                 "تحكم سريع وآمن في إعدادات Android بالصوت",
-                11,
+                12,
                 False,
-                "center",
-                MUTED
+                "right"
             )
         )
 
-        # -------------------------------------------------
-        # RESULT
-        # -------------------------------------------------
+        status_card = Card(
+            text="الحالة",
+            icon="●",
+            subtitle="جاهز للاستماع"
+        )
+
+        self.status = (
+            status_card.subtitle_label
+        )
+
+        root.add_widget(
+            status_card
+        )
 
         self.result = self.label(
             "لم يتم التعرف على أي كلام بعد.",
-            11,
+            14,
             False,
-            "center",
-            WHITE
+            "center"
         )
 
-        result_panel = RoundedPanel(
-            orientation="vertical",
+        result_box = BoxLayout(
             size_hint_y=None,
-            height=dp(48),
-            padding=dp(6),
-            bg=(
-                0.02,
-                0.01,
-                0.02,
-                0.72
-            )
+            height=dp(72),
+            padding=dp(8)
         )
 
-        result_panel.add_widget(
+        result_box.add_widget(
             self.result
         )
 
         root.add_widget(
-            result_panel
+            result_box
         )
-
-        # -------------------------------------------------
-        # MICROPHONE
-        # -------------------------------------------------
 
         self.mic = MicButton()
 
         self.mic.bind(
-            on_release=self.toggle_listening
+            on_release=
+            self.toggle_listening
         )
 
         root.add_widget(
             self.mic
         )
 
-        # -------------------------------------------------
-        # STATUS
-        # -------------------------------------------------
-
-        self.status = self.label(
-            "جاهز للاستماع",
-            11,
-            False,
-            "center",
-            WHITE
+        quick = GridLayout(
+            cols=2,
+            spacing=dp(8),
+            size_hint_y=None
         )
 
-        root.add_widget(
-            self.status
+        quick.bind(
+            minimum_height=
+            quick.setter("height")
         )
 
-        # -------------------------------------------------
-        # BOTTOM BUTTONS
-        # -------------------------------------------------
+        for title, icon, sub, action in [
 
-        root.add_widget(
-            self.bottom_action(
-                "الأوامر الصوتية",
-                "عرض جميع أوامر التطبيق",
-                "MIC",
-                "commands"
+            (
+                "الاتصال",
+                "WIFI",
+                "Wi-Fi وBluetooth",
+                "wifi"
+            ),
+
+            (
+                "الشاشة",
+                "DISPLAY",
+                "السطوع والعرض",
+                "display"
+            ),
+
+            (
+                "البطارية",
+                "BAT",
+                "الطاقة والخلفية",
+                "battery"
+            ),
+
+            (
+                "الخصوصية",
+                "PRIV",
+                "الأمان والأذونات",
+                "privacy"
+            ),
+
+        ]:
+
+            c = Card(
+                text=title,
+                icon=icon,
+                subtitle=sub,
+                height=dp(96)
             )
-        )
+
+            c.bind(
+                on_release=
+                lambda *_x,
+                a=action:
+                self.setting_action(a)
+            )
+
+            quick.add_widget(c)
 
         root.add_widget(
-            self.bottom_action(
+            quick
+        )
+
+        nav = GridLayout(
+            cols=4,
+            spacing=dp(6),
+            size_hint_y=None,
+            height=dp(62)
+        )
+
+        for text, icon, screen in [
+
+            (
+                "الرئيسية",
+                "⌂",
+                "home"
+            ),
+
+            (
+                "الإعدادات",
+                "⚙",
+                "settings"
+            ),
+
+            (
+                "الأوامر",
+                "🎙",
+                "commands"
+            ),
+
+            (
                 "من نحن",
-                "معلومات عن التطبيق والمطور",
                 "INFO",
                 "about"
+            ),
+
+        ]:
+
+            c = Card(
+                text=text,
+                icon=icon,
+                subtitle="",
+                height=dp(58)
             )
+
+            c.bind(
+                on_release=
+                lambda *_x,
+                n=screen:
+                self.goto(n)
+            )
+
+            nav.add_widget(c)
+
+        root.add_widget(
+            nav
         )
 
-        s.add_widget(root)
+        self.add_background(
+            root
+        )
+
+        s.add_widget(
+            root
+        )
 
         return s
 
     # =====================================================
-    # BOTTOM ACTION
-    # =====================================================
-
-    def bottom_action(
-        self,
-        title,
-        subtitle,
-        icon,
-        target
-    ):
-
-        c = BottomCard(
-            title,
-            subtitle,
-            icon,
-            action=target
-        )
-
-        c.bind(
-            on_release=lambda *_:
-            self.goto(target)
-        )
-
-        return c
-
-    # =====================================================
-    # SETTINGS SCREEN
+    # SETTINGS
     # =====================================================
 
     def settings_screen(self):
@@ -1037,98 +704,29 @@ class VoiceControlApp(App):
 
         root = BoxLayout(
             orientation="vertical",
-            padding=(
-                dp(10),
-                dp(8)
-            ),
-            spacing=dp(7)
+            padding=dp(12),
+            spacing=dp(8)
         )
 
-        self.add_background(
-            root,
-            0.40
-        )
-
-        # -------------------------------------------------
-        # HEADER
-        # -------------------------------------------------
-
-        top = BoxLayout(
-            size_hint_y=None,
-            height=dp(50),
-            spacing=dp(5)
-        )
-
-        back = Label(
-            text="‹",
-            font_name=FONT,
-            font_size=dp(30),
-            color=WHITE,
-            size_hint_x=None,
-            width=dp(35)
-        )
-
-        back.bind(
-            on_touch_down=lambda *_:
-            self.goto("home")
-        )
-
-        top.add_widget(back)
-
-        top.add_widget(
-            self.label(
-                "إعدادات الهاتف",
-                19,
-                True,
-                "center"
+        root.add_widget(
+            self.header(
+                "إعدادات الهاتف"
             )
         )
 
-        root.add_widget(top)
-
-        # -------------------------------------------------
-        # SEARCH
-        # -------------------------------------------------
-
         self.search_input = TextInput(
-
             hint_text=rtl(
-                "ابحث في الإعدادات..."
+                "🔎 ابحث في الإعدادات..."
             ),
-
-            font_name=FONT,
-
-            font_size=dp(11.5),
-
+            font_name=ARABIC_FONT,
+            font_size=dp(13),
             multiline=False,
-
             size_hint_y=None,
-
-            height=dp(43),
-
+            height=dp(48),
             padding=[
-                dp(14),
-                dp(10)
+                dp(12),
+                dp(12)
             ],
-
-            foreground_color=WHITE,
-
-            hint_text_color=(
-                0.65,
-                0.65,
-                0.70,
-                1
-            ),
-
-            background_color=(
-                0.01,
-                0.015,
-                0.025,
-                0.90
-            ),
-
-            cursor_color=RED,
-
             halign="right"
         )
 
@@ -1140,22 +738,14 @@ class VoiceControlApp(App):
             self.search_input
         )
 
-        # -------------------------------------------------
-        # SCROLL
-        # -------------------------------------------------
-
         scroll = ScrollView(
-            do_scroll_x=False,
-            bar_width=dp(3)
+            do_scroll_x=False
         )
 
         self.settings_content = BoxLayout(
             orientation="vertical",
-            spacing=dp(6),
-            padding=(
-                dp(1),
-                dp(3)
-            ),
+            spacing=dp(8),
+            padding=dp(4),
             size_hint_y=None
         )
 
@@ -1176,7 +766,13 @@ class VoiceControlApp(App):
             scroll
         )
 
-        s.add_widget(root)
+        self.add_background(
+            root
+        )
+
+        s.add_widget(
+            root
+        )
 
         return s
 
@@ -1189,316 +785,439 @@ class VoiceControlApp(App):
         sections = [
 
             (
-                "الاتصال والشبكات",
+                "WIFI الاتصال والشبكات",
                 [
+
                     (
-                        "الواي فاي",
+                        "Wi-Fi",
                         "wifi",
-                        "Wi-Fi وWi-Fi Direct",
-                        "W"
+                        "الشبكات اللاسلكية",
+                        "WIFI"
                     ),
+
                     (
-                        "البلوتوث",
+                        "Bluetooth",
                         "bluetooth",
                         "الأجهزة القريبة",
-                        "B"
+                        "BT"
                     ),
+
                     (
                         "شبكة الهاتف",
                         "mobile",
-                        "شبكة الهاتف المحمول",
-                        "M"
+                        "الشريحة والشبكة",
+                        "APP"
                     ),
+
                     (
                         "بيانات الهاتف",
                         "data",
                         "استخدام البيانات",
-                        "D"
+                        "DATA"
                     ),
+
                     (
                         "نقطة الاتصال",
                         "hotspot",
                         "مشاركة الإنترنت",
-                        "H"
+                        "HOT"
                     ),
+
                     (
                         "VPN",
                         "vpn",
                         "الشبكة الخاصة",
-                        "V"
+                        "VPN"
                     ),
+
                     (
                         "NFC",
                         "nfc",
                         "الاتصال قريب المدى",
-                        "N"
+                        "NFC"
                     ),
+
                 ]
             ),
 
             (
-                "الصوت والإشعارات",
+                "NOTIFY الإشعارات",
                 [
+
                     (
                         "الإشعارات",
                         "notifications",
-                        "إدارة الإشعارات",
-                        "!"
+                        "إعدادات التنبيهات",
+                        "NOTIFY"
                     ),
+
+                    (
+                        "إشعارات التطبيق",
+                        "app_notifications",
+                        "هذا التطبيق",
+                        "📲"
+                    ),
+
                     (
                         "عدم الإزعاج",
                         "do_not_disturb",
-                        "الصوت وعدم الإزعاج",
-                        "D"
+                        "الصوت والتنبيهات",
+                        "DND"
                     ),
+
                     (
                         "الوصول إلى الإشعارات",
                         "notification_access",
                         "صلاحيات التنبيهات",
-                        "A"
+                        "👁"
                     ),
+
                 ]
             ),
 
             (
-                "البطارية والخلفية",
+                "BAT البطارية والخلفية",
                 [
+
                     (
                         "البطارية",
                         "battery",
                         "حالة الطاقة",
-                        "B"
+                        "BAT"
                     ),
+
                     (
                         "استخدام البطارية",
                         "battery_usage",
                         "استهلاك التطبيقات",
-                        "U"
+                        "DATA"
                     ),
+
                     (
                         "توفير الطاقة",
                         "battery_saver",
                         "إطالة عمر البطارية",
-                        "P"
+                        "POWER"
                     ),
+
                     (
                         "تحسين البطارية",
                         "battery_optimization",
                         "تحسين التطبيقات",
-                        "O"
+                        "🛠"
                     ),
+
                 ]
             ),
 
             (
-                "الشاشة",
+                "🎨 النمط والسمات",
                 [
+
+                    (
+                        "الوضع الفاتح",
+                        "theme_light",
+                        "مظهر التطبيق",
+                        "SUN"
+                    ),
+
+                    (
+                        "الوضع الداكن",
+                        "theme_dark",
+                        "مظهر التطبيق",
+                        "DARK"
+                    ),
+
+                    (
+                        "الوضع التلقائي",
+                        "theme_system",
+                        "حسب النظام",
+                        "AUTO"
+                    ),
+
+                ]
+            ),
+
+            (
+                "DISPLAY الشاشة",
+                [
+
                     (
                         "السطوع",
                         "brightness",
                         "السطوع وإذن تعديل النظام",
-                        "S"
+                        "SUN"
                     ),
+
                     (
                         "إعدادات العرض",
                         "display",
                         "الشاشة والعرض",
-                        "D"
+                        "DISPLAY"
                     ),
+
                 ]
             ),
 
             (
-                "الخصوصية والحماية",
+                "PRIV الخصوصية والحماية",
                 [
+
                     (
                         "الخصوصية",
                         "privacy",
                         "إعدادات الخصوصية",
-                        "P"
+                        "PRIV"
                     ),
+
                     (
                         "الموقع",
                         "location",
                         "خدمات الموقع",
-                        "L"
+                        "LOC"
                     ),
+
                     (
                         "أذونات التطبيق",
                         "app_permissions",
                         "صلاحيات التطبيق",
-                        "A"
+                        "SEC"
                     ),
+
                     (
                         "الأمان",
                         "security",
                         "الحماية وقفل الشاشة",
-                        "S"
+                        "SEC"
                     ),
+
                 ]
             ),
 
             (
-                "الحسابات وGoogle",
+                "EMERGENCY الطوارئ",
                 [
+
+                    (
+                        "الطوارئ",
+                        "emergency",
+                        "ميزات الطوارئ",
+                        "EMERGENCY"
+                    ),
+
+                ]
+            ),
+
+            (
+                "ACCOUNT الحسابات وGoogle",
+                [
+
                     (
                         "الحسابات",
                         "accounts",
                         "الحسابات والمزامنة",
-                        "A"
+                        "ACCOUNT"
                     ),
+
                     (
                         "Google",
                         "google",
                         "خدمات Google",
                         "G"
                     ),
+
                     (
                         "النسخ الاحتياطي",
                         "backup",
                         "النسخ والاستعادة",
-                        "B"
+                        "BACKUP"
                     ),
+
                 ]
             ),
 
             (
-                "التطبيقات",
+                "APP التطبيقات",
                 [
+
                     (
                         "جميع التطبيقات",
                         "apps",
                         "إدارة التطبيقات",
-                        "A"
+                        "APP"
                     ),
+
                     (
                         "معلومات التطبيق",
                         "app_details",
                         "هذا التطبيق",
-                        "I"
+                        "ℹ️"
                     ),
+
                     (
                         "التطبيقات الافتراضية",
                         "default_apps",
                         "التطبيقات الأساسية",
-                        "D"
+                        "⭐"
                     ),
+
                     (
                         "الوصول الخاص",
                         "special_access",
                         "صلاحيات خاصة",
-                        "S"
+                        "🔑"
                     ),
+
                     (
                         "فوق التطبيقات الأخرى",
                         "overlay",
                         "العرض فوق التطبيقات",
-                        "O"
+                        "▣"
                     ),
+
                 ]
             ),
 
             (
-                "المقاييس والاستخدام",
+                "DATA المقاييس والاستخدام",
                 [
+
                     (
                         "استخدام البيانات",
                         "data",
                         "الشبكة",
-                        "D"
+                        "DATA"
                     ),
+
                     (
                         "التخزين",
                         "storage",
                         "مساحة الهاتف",
-                        "T"
+                        "STORAGE"
                     ),
+
                     (
                         "وقت استخدام الجهاز",
                         "digital_wellbeing",
-                        "الرفاهية الرقمية",
-                        "T"
+                        "وقت الشاشة",
+                        "TIME"
                     ),
+
                 ]
             ),
 
             (
-                "النظام والميزات المتقدمة",
+                "⚙️ النظام والميزات المتقدمة",
                 [
+
                     (
                         "تحديث النظام",
                         "system_update",
                         "تحديث البرنامج",
-                        "U"
+                        "UPDATE"
                     ),
+
                     (
                         "حول الهاتف",
                         "about_device",
                         "معلومات الجهاز",
-                        "I"
+                        "INFO"
                     ),
+
                     (
                         "خيارات المطور",
                         "developer",
                         "أدوات المطور",
-                        "D"
+                        "DEV"
                     ),
+
                     (
                         "إمكانية الوصول",
                         "accessibility",
                         "ميزات الوصول",
-                        "A"
+                        "ACCESS"
                     ),
+
                     (
                         "اللغة والإدخال",
                         "language",
                         "اللغة ولوحة المفاتيح",
-                        "L"
+                        "LANG"
                     ),
+
                     (
                         "التاريخ والوقت",
                         "date",
                         "الوقت والتاريخ",
-                        "T"
+                        "TIME"
                     ),
+
                     (
                         "إعادة ضبط الهاتف",
                         "reset",
                         "خيارات إعادة الضبط",
-                        "R"
+                        "↺"
                     ),
+
                 ]
             ),
 
             (
-                "إعدادات التطبيق",
+                "FAMILY التحكم الأبوي",
                 [
+
+                    (
+                        "التحكم الأبوي",
+                        "parental",
+                        "إدارة العائلة",
+                        "FAMILY"
+                    ),
+
+                    (
+                        "الرفاهية الرقمية",
+                        "digital_wellbeing",
+                        "وقت الشاشة",
+                        "TIME"
+                    ),
+
+                ]
+            ),
+
+            (
+                "MIC إعدادات التطبيق",
+                [
+
                     (
                         "العربية",
                         "lang_ar",
                         "لغة التعرف الصوتي",
                         "AR"
                     ),
+
                     (
                         "English",
                         "lang_en",
                         "Speech recognition",
                         "EN"
                     ),
+
                     (
                         "صفحة الأوامر",
                         "commands",
                         "الأوامر المتاحة",
                         "MIC"
                     ),
+
                     (
                         "من نحن",
                         "about_app",
                         "المطور والمعلومات",
                         "INFO"
                     ),
+
                 ]
             ),
+
         ]
 
         self.settings_content.clear_widgets()
@@ -1509,38 +1228,54 @@ class VoiceControlApp(App):
 
             title = self.label(
                 section,
-                14,
+                16,
                 True,
-                "right",
-                WHITE
+                "right"
             )
 
             title.size_hint_y = None
-
-            title.height = dp(34)
+            title.height = dp(42)
 
             self.settings_content.add_widget(
                 title
             )
 
+            grid = GridLayout(
+                cols=2,
+                spacing=dp(7),
+                size_hint_y=None
+            )
+
+            grid.bind(
+                minimum_height=
+                grid.setter("height")
+            )
+
             for caption, action, sub, icon in items:
 
-                card = SettingCard(
-                    caption,
-                    sub,
-                    icon,
-                    action=action,
-                    accent=RED,
-                    size_hint_x=1
+                card = Card(
+                    text=caption,
+                    icon=icon,
+                    subtitle=sub,
+                    height=dp(92)
                 )
+
+                card.action_key = action
+
+                card.search_text = (
+                    caption
+                    + " "
+                    + sub
+                ).lower()
 
                 card.bind(
                     on_release=
-                    lambda *_x, a=action:
+                    lambda *_x,
+                    a=action:
                     self.setting_action(a)
                 )
 
-                self.settings_content.add_widget(
+                grid.add_widget(
                     card
                 )
 
@@ -1548,8 +1283,12 @@ class VoiceControlApp(App):
                     card
                 )
 
+            self.settings_content.add_widget(
+                grid
+            )
+
     # =====================================================
-    # FILTER SETTINGS
+    # FILTER
     # =====================================================
 
     def filter_settings(self, *_):
@@ -1562,20 +1301,24 @@ class VoiceControlApp(App):
 
         for card in self.all_setting_cards:
 
-            show = (
+            visible = (
                 not query
-            ) or (
-                query in card.search_text
+                or query in card.search_text
             )
 
             card.opacity = (
-                1 if show else 0
+                1 if visible else 0
             )
 
-            card.disabled = not show
+            card.disabled = (
+                bool(
+                    query
+                    and not visible
+                )
+            )
 
     # =====================================================
-    # COMMANDS SCREEN
+    # COMMANDS
     # =====================================================
 
     def commands_screen(self):
@@ -1586,159 +1329,94 @@ class VoiceControlApp(App):
 
         root = BoxLayout(
             orientation="vertical",
-            padding=(
-                dp(12),
-                dp(8)
-            ),
-            spacing=dp(7)
+            padding=dp(16),
+            spacing=dp(10)
         )
 
-        self.add_background(
-            root,
-            0.44
-        )
-
-        top = BoxLayout(
-            size_hint_y=None,
-            height=dp(50)
-        )
-
-        back = Label(
-            text="‹",
-            font_name=FONT,
-            font_size=dp(30),
-            color=WHITE,
-            size_hint_x=None,
-            width=dp(35)
-        )
-
-        back.bind(
-            on_touch_down=lambda *_:
-            self.goto("home")
-        )
-
-        top.add_widget(back)
-
-        top.add_widget(
-            self.label(
-                "الأوامر الصوتية",
-                19,
-                True,
-                "center"
+        root.add_widget(
+            self.header(
+                "الأوامر الصوتية"
             )
         )
 
-        root.add_widget(top)
-
-        panel = RoundedPanel(
-            orientation="vertical",
-            padding=(
-                dp(18),
-                dp(14)
-            ),
-            spacing=dp(7),
-            bg=(
-                0.02,
-                0.012,
-                0.028,
-                0.93
-            ),
-            size_hint_y=None
+        scroll = ScrollView(
+            do_scroll_x=False
         )
 
-        panel.bind(
-            minimum_height=
-            panel.setter("height")
-        )
+        text = (
+            "يمكنك قول:\n\n"
 
-        intro = self.label(
-            "يمكنك قول:",
-            14,
-            True,
-            "right"
-        )
+            "• افتح الواي فاي\n"
+            "• افتح البلوتوث\n"
+            "• افتح شبكة الهاتف\n"
+            "• افتح نقطة الاتصال\n"
+            "• افتح الإشعارات\n"
+            "• افتح البطارية\n"
+            "• افتح الخصوصية\n"
+            "• افتح الموقع\n"
+            "• افتح الحماية\n"
+            "• افتح شاشة القفل\n"
+            "• افتح الطوارئ\n"
+            "• افتح الحسابات\n"
+            "• افتح النسخ الاحتياطي\n"
+            "• افتح Google\n"
+            "• افتح تحديث النظام\n"
+            "• افتح حول الهاتف\n"
+            "• افتح خيارات المطور\n"
+            "• افتح التحكم الأبوي\n"
+            "• ارفع الصوت\n"
+            "• اخفض الصوت\n"
+            "• كتم الصوت\n"
+            "• اجعل السطوع 50\n\n"
 
-        intro.size_hint_y = None
-        intro.height = dp(35)
-
-        panel.add_widget(
-            intro
-        )
-
-        commands = [
-
-            "افتح الواي فاي",
-            "افتح البلوتوث",
-            "افتح شبكة الهاتف",
-            "افتح نقطة الاتصال",
-            "افتح الإشعارات",
-            "افتح البطارية",
-            "افتح الخصوصية",
-            "افتح الموقع",
-            "افتح الحماية",
-            "افتح شاشة القفل",
-            "افتح الطوارئ",
-            "افتح الحسابات",
-            "افتح النسخ الاحتياطي",
-            "افتح Google",
-            "افتح تحديث النظام",
-            "افتح حول الهاتف",
-            "افتح خيارات المطور",
-            "ارفع الصوت",
-            "اخفض الصوت",
-            "كتم الصوت",
-            "اجعل السطوع 50",
-        ]
-
-        for cmd in commands:
-
-            row = self.label(
-                "• " + cmd,
-                11,
-                False,
-                "right",
-                WHITE
-            )
-
-            row.size_hint_y = None
-            row.height = dp(27)
-
-            panel.add_widget(row)
-
-        eng = self.label(
             "English:\n"
             "Open Wi-Fi\n"
             "Open Bluetooth\n"
             "Open settings\n"
+            "Open privacy\n"
             "Open battery\n"
-            "Open location\n"
-            "Open security",
-            10.5,
+            "Open developer options"
+        )
+
+        lab = self.label(
+            text,
+            15,
             False,
-            "left",
-            MUTED
+            "right"
         )
 
-        eng.size_hint_y = None
-        eng.height = dp(170)
+        lab.size_hint_y = None
 
-        panel.add_widget(eng)
-
-        scroll = ScrollView(
-            do_scroll_x=False,
-            bar_width=dp(3)
+        lab.bind(
+            texture_size=
+            lambda w, size:
+            setattr(
+                w,
+                "height",
+                size[1] + dp(20)
+            )
         )
 
-        scroll.add_widget(panel)
+        scroll.add_widget(
+            lab
+        )
 
-        root.add_widget(scroll)
+        root.add_widget(
+            scroll
+        )
 
-        s.add_widget(root)
+        self.add_background(
+            root
+        )
+
+        s.add_widget(
+            root
+        )
 
         return s
 
     # =====================================================
-    # ABOUT SCREEN
+    # ABOUT
     # =====================================================
 
     def about_screen(self):
@@ -1749,184 +1427,152 @@ class VoiceControlApp(App):
 
         root = BoxLayout(
             orientation="vertical",
-            padding=(
-                dp(18),
-                dp(10)
-            ),
-            spacing=dp(8)
+            padding=dp(22),
+            spacing=dp(12)
         )
-
-        self.add_background(
-            root,
-            0.54
-        )
-
-        # -------------------------------------------------
-        # HEADER
-        # -------------------------------------------------
-
-        top = BoxLayout(
-            size_hint_y=None,
-            height=dp(50)
-        )
-
-        back = Label(
-            text="‹",
-            font_name=FONT,
-            font_size=dp(30),
-            color=WHITE,
-            size_hint_x=None,
-            width=dp(35)
-        )
-
-        back.bind(
-            on_touch_down=lambda *_:
-            self.goto("home")
-        )
-
-        top.add_widget(back)
-
-        top.add_widget(
-            self.label(
-                "من نحن",
-                19,
-                True,
-                "center",
-                WHITE
-            )
-        )
-
-        root.add_widget(top)
 
         root.add_widget(
-            BoxLayout(
-                size_hint_y=None,
-                height=dp(18)
+            self.label(
+                "من نحن",
+                28,
+                True,
+                "center",
+                (1, 1, 1, 1)
             )
         )
-
-        # -------------------------------------------------
-        # APP NAME
-        # -------------------------------------------------
 
         root.add_widget(
             self.label(
                 "Voice Control",
-                25,
+                22,
                 True,
                 "center",
-                WHITE
+                (1, 1, 1, 1)
             )
         )
-
-        # -------------------------------------------------
-        # DESCRIPTION
-        # -------------------------------------------------
 
         root.add_widget(
             self.label(
-                "تطبيق للتحكم الصوتي وفتح إعدادات Android بسرعة،\n"
-                "مع دعم العربية وEnglish.",
-                12,
+                "تطبيق للتحكم الصوتي وفتح إعدادات Android بسرعة، مع دعم العربية وEnglish.",
+                16,
                 False,
                 "center",
-                WHITE
+                (1, 1, 1, 1)
             )
         )
 
-        # -------------------------------------------------
-        # INFORMATION CARD
-        # -------------------------------------------------
-
-        info = RoundedPanel(
-            orientation="vertical",
-            padding=(
-                dp(16),
-                dp(10)
-            ),
-            spacing=dp(3),
-            size_hint_y=None,
-            height=dp(120),
-            bg=(
-                0.015,
-                0.01,
-                0.025,
-                0.88
-            )
-        )
-
-        info.add_widget(
+        root.add_widget(
             self.label(
-                "المطور",
-                10,
-                False,
-                "right",
-                WHITE
-            )
-        )
-
-        info.add_widget(
-            self.label(
-                "مهند الحمادي",
-                15,
+                "المطور: مهند الحمادي",
+                18,
                 True,
-                "right",
-                WHITE
+                "center",
+                (1, 1, 1, 1)
             )
         )
-
-        info.add_widget(
-            self.label(
-                "الإصدار",
-                10,
-                False,
-                "right",
-                WHITE
-            )
-        )
-
-        info.add_widget(
-            self.label(
-                "1.0.0",
-                12,
-                True,
-                "right",
-                WHITE
-            )
-        )
-
-        root.add_widget(info)
-
-        # -------------------------------------------------
-        # FOOTER
-        # -------------------------------------------------
 
         root.add_widget(
             self.label(
                 "واجهة حديثة • أوامر صوتية • إعدادات منظمة",
-                10.5,
+                13,
                 False,
                 "center",
-                WHITE
+                (1, 1, 1, 1)
             )
         )
 
         root.add_widget(
-            BoxLayout()
-        )
-
-        root.add_widget(
-            self.bottom_action(
+            self.button_back(
                 "العودة للرئيسية",
-                "",
-                "‹",
                 "home"
             )
         )
 
-        s.add_widget(root)
+        self.add_background(
+            root
+        )
+
+        s.add_widget(
+            root
+        )
 
         return s
+
+    # =====================================================
+    # BACK BUTTON
+    # =====================================================
+
+    def button_back(
+        self,
+        text,
+        target
+    ):
+
+        c = Card(
+            text=text,
+            icon="‹",
+            subtitle="",
+            height=dp(58)
+        )
+
+        c.bind(
+            on_release=
+            lambda *_:
+            self.goto(target)
+        )
+
+        return c
+
+    # =====================================================
+    # BACKGROUND
+    # =====================================================
+
+    def add_background(
+        self,
+        root
+    ):
+
+        try:
+
+            with root.canvas.before:
+
+                root._bg_color = Color(
+                    1,
+                    1,
+                    1,
+                    0.28
+                )
+
+                root._bg_rect = RoundedRectangle(
+                    source=BACKGROUND_FILE,
+                    pos=root.pos,
+                    size=root.size
+                )
+
+            root.bind(
+                pos=lambda *_:
+                setattr(
+                    root._bg_rect,
+                    "pos",
+                    root.pos
+                )
+            )
+
+            root.bind(
+                size=lambda *_:
+                setattr(
+                    root._bg_rect,
+                    "size",
+                    root.size
+                )
+            )
+
+        except Exception as exc:
+
+            print(
+                "background:",
+                exc
+            )
 
     # =====================================================
     # NAVIGATION
@@ -1934,15 +1580,11 @@ class VoiceControlApp(App):
 
     def goto(self, name):
 
-        mapping = {
-            "الرئيسية": "home",
-            "الإعدادات": "settings"
-        }
+        if name == "الرئيسية":
 
-        self.sm.current = mapping.get(
-            name,
-            name
-        )
+            name = "home"
+
+        self.sm.current = name
 
     # =====================================================
     # LANGUAGE
@@ -2011,7 +1653,8 @@ class VoiceControlApp(App):
                         [
                             Permission.RECORD_AUDIO
                         ],
-                        lambda *_: None
+                        lambda *_:
+                        None
                     )
 
                     return False
@@ -2023,12 +1666,16 @@ class VoiceControlApp(App):
         return True
 
     # =====================================================
-    # START
+    # APP START
     # =====================================================
 
     def on_start(self):
 
-        if ANDROID and JNIUS and not self.bound:
+        if (
+            ANDROID
+            and JNIUS
+            and not self.bound
+        ):
 
             try:
 
@@ -2049,7 +1696,7 @@ class VoiceControlApp(App):
         self.request_mic()
 
     # =====================================================
-    # STOP
+    # APP STOP
     # =====================================================
 
     def on_stop(self):
@@ -2064,7 +1711,11 @@ class VoiceControlApp(App):
 
             pass
 
-        if ANDROID and JNIUS and self.bound:
+        if (
+            ANDROID
+            and JNIUS
+            and self.bound
+        ):
 
             try:
 
@@ -2150,11 +1801,11 @@ class VoiceControlApp(App):
             self.listening = True
 
             self.mic.label.text = rtl(
-                "⏹\nجارٍ الاستماع"
+                "⏹️\nجارٍ الاستماع"
             )
 
             self.set_status(
-                "استمع الآن..."
+                "MIC استمع الآن..."
             )
 
             PythonActivity.mActivity.startActivityForResult(
@@ -2206,7 +1857,10 @@ class VoiceControlApp(App):
     # SPEECH RESULT
     # =====================================================
 
-    def finish_result(self, intent):
+    def finish_result(
+        self,
+        intent
+    ):
 
         self.mic.label.text = rtl(
             "MIC\nابدأ التحدث"
@@ -2226,13 +1880,16 @@ class VoiceControlApp(App):
                 "android.speech.RecognizerIntent"
             )
 
-            results = intent.getStringArrayListExtra(
-                RI.EXTRA_RESULTS
+            results = (
+                intent.getStringArrayListExtra(
+                    RI.EXTRA_RESULTS
+                )
             )
 
             text = (
                 str(results.get(0))
-                if results and results.size()
+                if results
+                and results.size()
                 else ""
             )
 
@@ -2252,7 +1909,7 @@ class VoiceControlApp(App):
             )
 
             self.set_status(
-                "تم التعرف على الكلام"
+                "✅ تم التعرف على الكلام"
             )
 
             self.handle_command(
@@ -2266,19 +1923,24 @@ class VoiceControlApp(App):
             )
 
     # =====================================================
-    # NORMALIZE COMMAND
+    # NORMALIZE
     # =====================================================
 
-    def normalize(self, text):
+    def normalize(
+        self,
+        text
+    ):
 
         t = text.strip().lower()
 
         for a, b in [
+
             ("أ", "ا"),
             ("إ", "ا"),
             ("آ", "ا"),
             ("ة", "ه"),
-            ("ى", "ي")
+            ("ى", "ي"),
+
         ]:
 
             t = t.replace(
@@ -2291,16 +1953,17 @@ class VoiceControlApp(App):
         )
 
     # =====================================================
-    # HANDLE COMMAND
+    # COMMAND HANDLER
     # =====================================================
 
-    def handle_command(self, text):
+    def handle_command(
+        self,
+        text
+    ):
 
-        t = self.normalize(text)
-
-        # -------------------------------------------------
-        # HELP
-        # -------------------------------------------------
+        t = self.normalize(
+            text
+        )
 
         if contains_any(
             t,
@@ -2311,13 +1974,11 @@ class VoiceControlApp(App):
             ]
         ):
 
-            self.goto("commands")
+            self.goto(
+                "commands"
+            )
 
             return
-
-        # -------------------------------------------------
-        # CLEAR
-        # -------------------------------------------------
 
         if contains_any(
             t,
@@ -2338,10 +1999,6 @@ class VoiceControlApp(App):
 
             return
 
-        # -------------------------------------------------
-        # VOLUME UP
-        # -------------------------------------------------
-
         if contains_any(
             t,
             [
@@ -2359,10 +2016,6 @@ class VoiceControlApp(App):
             )
 
             return
-
-        # -------------------------------------------------
-        # VOLUME DOWN
-        # -------------------------------------------------
 
         if contains_any(
             t,
@@ -2383,10 +2036,6 @@ class VoiceControlApp(App):
 
             return
 
-        # -------------------------------------------------
-        # MUTE
-        # -------------------------------------------------
-
         if contains_any(
             t,
             [
@@ -2401,10 +2050,6 @@ class VoiceControlApp(App):
 
             return
 
-        # -------------------------------------------------
-        # BRIGHTNESS
-        # -------------------------------------------------
-
         if contains_any(
             t,
             [
@@ -2414,8 +2059,6 @@ class VoiceControlApp(App):
             ]
         ):
 
-            import re
-
             match = re.search(
                 r"(\d{1,3})",
                 t
@@ -2424,7 +2067,9 @@ class VoiceControlApp(App):
             if match:
 
                 self.set_brightness(
-                    int(match.group(1))
+                    int(
+                        match.group(1)
+                    )
                 )
 
                 return
@@ -2458,10 +2103,6 @@ class VoiceControlApp(App):
                 )
 
                 return
-
-        # -------------------------------------------------
-        # SETTINGS COMMANDS
-        # -------------------------------------------------
 
         commands = [
 
@@ -2513,16 +2154,12 @@ class VoiceControlApp(App):
             ),
 
             (
-                [
-                    "vpn"
-                ],
+                ["vpn"],
                 "vpn"
             ),
 
             (
-                [
-                    "nfc"
-                ],
+                ["nfc"],
                 "nfc"
             ),
 
@@ -2624,9 +2261,7 @@ class VoiceControlApp(App):
             ),
 
             (
-                [
-                    "google"
-                ],
+                ["google"],
                 "google"
             ),
 
@@ -2689,6 +2324,7 @@ class VoiceControlApp(App):
                 ],
                 "settings"
             ),
+
         ]
 
         for words, action in commands:
@@ -2712,7 +2348,10 @@ class VoiceControlApp(App):
     # SETTING ACTION
     # =====================================================
 
-    def setting_action(self, action):
+    def setting_action(
+        self,
+        action
+    ):
 
         if action == "lang_ar":
 
@@ -2750,15 +2389,41 @@ class VoiceControlApp(App):
 
             self.dark = False
 
+            Window.clearcolor = (
+                0.96,
+                0.97,
+                0.98,
+                1
+            )
+
+            self.set_status(
+                "تم اختيار الوضع الفاتح"
+            )
+
             return
 
         if action == "theme_dark":
 
             self.dark = True
 
+            Window.clearcolor = (
+                0.035,
+                0.045,
+                0.06,
+                1
+            )
+
+            self.set_status(
+                "تم اختيار الوضع الداكن"
+            )
+
             return
 
         if action == "theme_system":
+
+            self.set_status(
+                "الوضع التلقائي يعتمد على إعداد النظام"
+            )
 
             return
 
@@ -2898,6 +2563,7 @@ class VoiceControlApp(App):
 
             "app_permissions":
                 "android.settings.APPLICATION_DETAILS_SETTINGS",
+
         }
 
         self.open_android_setting(
@@ -2911,7 +2577,10 @@ class VoiceControlApp(App):
     # OPEN ANDROID SETTING
     # =====================================================
 
-    def open_android_setting(self, action):
+    def open_android_setting(
+        self,
+        action
+    ):
 
         if not ANDROID or not JNIUS:
 
@@ -3046,7 +2715,7 @@ class VoiceControlApp(App):
             )
 
     # =====================================================
-    # WRITE SYSTEM SETTINGS
+    # WRITE SETTINGS
     # =====================================================
 
     def open_write_settings(self):
@@ -3112,10 +2781,13 @@ class VoiceControlApp(App):
             )
 
     # =====================================================
-    # AUDIO UP / DOWN
+    # VOLUME
     # =====================================================
 
-    def audio_adjust(self, direction):
+    def audio_adjust(
+        self,
+        direction
+    ):
 
         if not ANDROID or not JNIUS:
 
@@ -3131,13 +2803,18 @@ class VoiceControlApp(App):
                 "org.kivy.android.PythonActivity"
             )
 
-            audio = PythonActivity.mActivity.getSystemService(
-                Context.AUDIO_SERVICE
+            audio = (
+                PythonActivity.mActivity
+                .getSystemService(
+                    Context.AUDIO_SERVICE
+                )
             )
 
             audio.adjustStreamVolume(
                 3,
-                1 if direction > 0 else -1,
+                1
+                if direction > 0
+                else -1,
                 0
             )
 
@@ -3175,8 +2852,11 @@ class VoiceControlApp(App):
                 "org.kivy.android.PythonActivity"
             )
 
-            audio = PythonActivity.mActivity.getSystemService(
-                Context.AUDIO_SERVICE
+            audio = (
+                PythonActivity.mActivity
+                .getSystemService(
+                    Context.AUDIO_SERVICE
+                )
             )
 
             audio.adjustStreamVolume(
@@ -3197,10 +2877,13 @@ class VoiceControlApp(App):
             )
 
     # =====================================================
-    # SET BRIGHTNESS
+    # BRIGHTNESS
     # =====================================================
 
-    def set_brightness(self, percent):
+    def set_brightness(
+        self,
+        percent
+    ):
 
         percent = max(
             0,
@@ -3261,7 +2944,10 @@ class VoiceControlApp(App):
     # CHANGE BRIGHTNESS
     # =====================================================
 
-    def change_brightness(self, delta):
+    def change_brightness(
+        self,
+        delta
+    ):
 
         if not ANDROID or not JNIUS:
 
